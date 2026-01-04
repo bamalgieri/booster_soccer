@@ -1,6 +1,6 @@
 # BOOSTER SOCCER SHOWDOWN
 
-![Booster Soccer Showdown Banner](resources/comp.png)  
+![Booster Soccer Showdown Banner](resources/comp.png)
 
 A fast, extensible robotics soccer competition focused on **generalization across environments**. All the models and datasets are hosted on [Hugging Face](https://huggingface.co/SaiResearch) and the competition is live on [SAI](https://competesai.com/competitions/cmp_xnSCxcJXQclQ).
 
@@ -8,9 +8,9 @@ A fast, extensible robotics soccer competition focused on **generalization acros
 
 ## Compatibility & Requirements
 
-* **Python**: 3.10+
-* **Pip**: compatible with environments using Python ≥ 3.10
-* **OS**: macOS (Apple Silicon), Linux, and Windows
+- **Python**: 3.10+
+- **Pip**: compatible with environments using Python ≥ 3.10
+- **OS**: macOS (Apple Silicon), Linux, and Windows
 
 > Tip: Use a Python 3.10+ environment created via `pyenv`, `conda`, or `uv` for the smoothest experience.
 
@@ -51,17 +51,17 @@ Booster Soccer Showdown supports keyboard teleop out of the box.
 
 ```bash
 python booster_control/teleoperate.py \
-  --env LowerT1GoaliePenaltyKick-v0 
+  --env LowerT1GoaliePenaltyKick-v0
   --renderer mujoco
 ```
 
 **Default bindings (example):**
 
-* `W/S`: move forward/backward
-* `A/D`: move left/right
-* `Q/E`: rotate left/right
-* `L`: reset commands
-* `P`: reset environment
+- `W/S`: move forward/backward
+- `A/D`: move left/right
+- `Q/E`: rotate left/right
+- `L`: reset commands
+- `P`: reset environment
 
 ---
 
@@ -78,13 +78,14 @@ python booster_control/teleoperate.py \
 
 (Tune `--pos_sensitivity` and `--rot_sensitivity` as needed for your setup.)
 
-There is another renderer as well which can be used, which speeds up the simulation - 
+There is another renderer as well which can be used, which speeds up the simulation -
 
 ```bash
 python booster_control/teleoperate.py \
   --env LowerT1GoaliePenaltyKick-v0 \
   --renderer mjviewer
 ```
+
 ---
 
 ## Mimic
@@ -93,11 +94,11 @@ The `mimic/` tools let you replay and analyze motions with MuJoCo.
 
 ### What’s inside
 
-* `mimic/forward_kinematics.py` — computes derived robot signals (end-effector poses, COM, contacts, velocities, etc.) from motion data using MuJoCo kinematics.
-* `mimic/visualize_data.py` — replays a motion in the MuJoCo viewer at a chosen FPS.
-* **Model**: the Booster T1 MuJoCo XML is in `mimic/assets/booster_t1/`.
+- `mimic/forward_kinematics.py` — computes derived robot signals (end-effector poses, COM, contacts, velocities, etc.) from motion data using MuJoCo kinematics.
+- `mimic/visualize_data.py` — replays a motion in the MuJoCo viewer at a chosen FPS.
+- **Model**: the Booster T1 MuJoCo XML is in `mimic/assets/booster_t1/`.
 
-> Motion files are hosted on [Hugging Face](https://huggingface.co/datasets/SaiResearch/booster_dataset) and can be downloaded to use with these scripts. 
+> Motion files are hosted on [Hugging Face](https://huggingface.co/datasets/SaiResearch/booster_dataset) and can be downloaded to use with these scripts.
 
 ---
 
@@ -112,9 +113,9 @@ python mimic/forward_kinematics.py \
 
 **Args (common):**
 
-* `--robot` : robot to be loaded (choices: booster_t1 or booster_lower_t1)
-* `--npz` : Name of the motion file (`.npz`).
-* `--out` : output `.npz` file with enriched signals.
+- `--robot` : robot to be loaded (choices: booster_t1 or booster_lower_t1)
+- `--npz` : Name of the motion file (`.npz`).
+- `--out` : output `.npz` file with enriched signals.
 
 ---
 
@@ -127,6 +128,7 @@ python mimic/visualize_data.py \
   --npz goal_kick.npz \
   --fps 30
 ```
+
 ---
 
 ## Training
@@ -137,10 +139,10 @@ We provide a minimal reinforcement learning pipeline for training agents with **
 
 Defines the **DDPG_FF model**, including:
 
-* Actor and Critic neural networks with configurable hidden layers and activation functions.
-* Target networks and soft-update mechanism for stability.
-* Training step implementation (critic loss with MSE, actor loss with policy gradient).
-* Utility functions for forward passes, action selection, and backpropagation.
+- Actor and Critic neural networks with configurable hidden layers and activation functions.
+- Target networks and soft-update mechanism for stability.
+- Training step implementation (critic loss with MSE, actor loss with policy gradient).
+- Utility functions for forward passes, action selection, and backpropagation.
 
 ---
 
@@ -148,14 +150,15 @@ Defines the **DDPG_FF model**, including:
 
 Provides the **training loop** and supporting components:
 
-* **ReplayBuffer** for experience storage and sampling.
-* **Exploration noise** injection to encourage policy exploration.
-* Iterative training loop that:
+- **ReplayBuffer** for experience storage and sampling.
+- **Exploration noise** injection to encourage policy exploration.
+- Iterative training loop that:
 
-  * Interacts with the environment.
-  * Stores experiences.
-  * Periodically samples minibatches to update actor/critic networks.
-* Tracks and logs progress (episode rewards, critic/actor loss) with `tqdm`.
+  - Interacts with the environment.
+  - Stores experiences.
+  - Periodically samples minibatches to update actor/critic networks.
+
+- Tracks and logs progress (episode rewards, critic/actor loss) with `tqdm`.
 
 ---
 
@@ -163,14 +166,14 @@ Provides the **training loop** and supporting components:
 
 Serves as the **entry point** to run training:
 
-* Initializes the Booster Soccer Showdown environment via the **SAI client**.
-* Defines a **Preprocessor** to normalize and concatenate robot state, ball state, and environment info into a training-ready observation vector.
-* Instantiates a **DDPG_FF model** with custom architecture.
-* Defines an **action function** that rescales raw policy outputs to environment-specific action bounds.
-* Calls the training loop, and after training, supports:
+- Initializes the Booster Soccer Showdown environment via the **SAI client**.
+- Defines a **Preprocessor** to normalize and concatenate robot state, ball state, and environment info into a training-ready observation vector.
+- Instantiates a **DDPG_FF model** with custom architecture.
+- Defines an **action function** that rescales raw policy outputs to environment-specific action bounds.
+- Calls the training loop, and after training, supports:
 
-  * `sai.watch(...)` for visualizing learned behavior.
-  * `sai.benchmark(...)` for local benchmarking.
+  - `sai.watch(...)` for visualizing learned behavior.
+  - `sai.benchmark(...)` for local benchmarking.
 
 ---
 
@@ -187,9 +190,60 @@ This will:
 3. Run the training loop with replay buffer and DDPG updates.
 4. Launch visualization and benchmarking after training.
 
-
 ### Example: Test pretrained model
 
 ```bash
 python training_scripts/test.py --env LowerT1KickToTarget-v0
+```
+
+---
+
+## Multi-Task Training (Single Policy)
+
+These scripts build a single command-level policy shared across:
+`LowerT1GoaliePenaltyKick-v0`, `LowerT1ObstaclePenaltyKick-v0`, `LowerT1KickToTarget-v0`.
+
+### 1) Build BC Dataset (commands from mocap)
+
+```bash
+python training_scripts/build_bc_dataset.py \
+  --input-root booster_dataset/soccer/booster_lower_t1 \
+  --output booster_dataset/imitation_learning/bc_commands.npz \
+  --task-mode all
+```
+
+### 2) BC Pretrain (command policy)
+
+```bash
+python training_scripts/bc_train.py \
+  --dataset booster_dataset/imitation_learning/bc_commands.npz \
+  --out training_runs/bc_actor.pt
+```
+
+### 3) Multi-Task TD3 Fine-Tune (balanced sampling)
+
+```bash
+python training_scripts/train_multitask.py \
+  --bc-weights training_runs/bc_actor.pt \
+  --total-timesteps 1000000 \
+  --n-envs 6 \
+  --save-dir training_runs/multitask_td3
+```
+
+### 4) Terminal-Only Evaluation (S1/S2/S3, S_overall)
+
+```bash
+python training_scripts/eval_multitask.py \
+  --model training_runs/multitask_td3/best_model.zip \
+  --episodes 10 \
+  --steps-weight -0.001 \
+  --deterministic
+```
+
+```bash
+python training_scripts/eval_multitask.py \
+  --model training_runs/overnight_20260102_231947/stage2/best_model.zip \
+  --episodes 10 \
+  --steps-weight -0.001 \
+  --deterministic
 ```

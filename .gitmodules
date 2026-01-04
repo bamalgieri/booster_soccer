@@ -1,0 +1,3 @@
+[submodule "booster_dataset"]
+	path = booster_dataset
+	url = https://huggingface.co/datasets/SaiResearch/booster_dataset
