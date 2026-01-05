@@ -73,3 +73,28 @@
 - `MultiTaskEvalCallback` tracks legacy `S_overall` best separately from competition best, saving `best_model.zip` (legacy) and `best_model_competition.zip` (competition).
 - Competition logs add `comp_eval/<task>` and `comp_eval/C_overall` alongside existing `eval_comp/*` metrics.
 - `training_scripts/overnight_3stage.py` adds `--competition-only-eval`/`--legacy-only-eval`, enforces mutual exclusivity, and chains stages via `pick_best_checkpoint` with safe fallbacks.
+
+---
+
+# Notes: Implementation Checklist + Diffs
+
+## Sources
+
+- `training_scripts/multitask_utils.py`
+- `training_scripts/train_multitask.py`
+- `training_scripts/eval_multitask.py`
+- `training_scripts/training.py`
+- `README.md`
+
+## Findings
+
+- Task assignment is centralized in `build_task_list` and currently deterministic based on weights.
+- Wrapper order is hard-coded; adding `ClipAction` or normalization wrappers will fail without relaxing checks.
+- Evaluation utilities return only aggregate scores; adding per-episode term metrics requires extending the return path.
+- SB3 `VecNormalize` stats are not saved/loaded; a separate save/load path is needed for eval parity.
+
+## Decisions
+
+- Use `VecNormalize` for training and pass `obs_rms` into evaluation to normalize observations for policy inference.
+- Randomize per-env task assignment at startup using a seeded RNG; tasks remain fixed per env slot.
+- Extend `--reward-profile` to include `env` and `competition`, while preserving `base` as an alias for `env`.

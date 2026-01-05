@@ -2,8 +2,14 @@ import argparse
 from pathlib import Path
 
 from stable_baselines3 import TD3
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from multitask_utils import TASK_SPECS, evaluate_all_tasks, evaluate_all_tasks_competition
+from multitask_utils import (
+    TASK_SPECS,
+    evaluate_all_tasks,
+    evaluate_all_tasks_competition,
+    make_env,
+)
 
 
 def generate_report_card(per_task_scores):
@@ -44,10 +50,20 @@ def main() -> None:
     parser.add_argument("--steps-weight", type=float, default=-0.001)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument("--vecnormalize", type=str, default=None)
     args = parser.parse_args()
 
     model_path = Path(args.model)
     model = TD3.load(model_path, device=args.device)
+    obs_rms = None
+    obs_rms_epsilon = 1e-8
+    if args.vecnormalize:
+        dummy_env = DummyVecEnv([make_env(TASK_SPECS[0])])
+        vec_norm = VecNormalize.load(args.vecnormalize, dummy_env)
+        vec_norm.training = False
+        vec_norm.norm_reward = False
+        obs_rms = vec_norm.obs_rms
+        obs_rms_epsilon = vec_norm.epsilon
 
     scores = evaluate_all_tasks(
         model,
@@ -55,12 +71,16 @@ def main() -> None:
         steps_weight=args.steps_weight,
         deterministic=args.deterministic,
         seed=0,
+        obs_rms=obs_rms,
+        obs_rms_epsilon=obs_rms_epsilon,
     )
     comp_scores = evaluate_all_tasks_competition(
         model,
         episodes=args.episodes,
         deterministic=args.deterministic,
         seed=0,
+        obs_rms=obs_rms,
+        obs_rms_epsilon=obs_rms_epsilon,
     )
 
     print("Per-task terminal scores:")

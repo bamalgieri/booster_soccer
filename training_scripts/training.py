@@ -102,5 +102,15 @@ def training_loop(
 
         episode_count += 1
 
+        reward_terms = info.get("reward_terms", {}) if isinstance(info, dict) else {}
+        if isinstance(reward_terms, dict) and reward_terms:
+            goal_scored = float(reward_terms.get("goal_scored", 0.0))
+            success = float(reward_terms.get("success", 0.0))
+            ball_hits = float(reward_terms.get("ball_hits", 0.0))
+            pbar.write(
+                f"Episode {episode_count} metrics: goal_scored={goal_scored:.1f} "
+                f"success={success:.1f} ball_hits={ball_hits:.1f}"
+            )
+
     pbar.close()
     env.close()

@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Tuple
 
 import gymnasium as gym
 from gymnasium import spaces
+from gymnasium.wrappers import ClipAction
 import numpy as np
 
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -52,52 +53,39 @@ COMP_REWARD_CONFIGS: Dict[str, Dict[str, float]] = {
     name: dict(config) for name, config in COMP_REWARD_CONFIG.items()
 }
 
+_EVAL_TERM_KEYS = (
+    "goal_scored",
+    "success",
+    "ball_hits",
+    "offside",
+    "robot_distance_ball",
+    "distance",
+)
+
 
 def build_task_list(
     n_envs: int,
     task_weights: Dict[str, float] | None = None,
     task_specs: List[TaskSpec] | None = None,
+    rng: np.random.Generator | None = None,
 ) -> List[TaskSpec]:
     if n_envs <= 0:
         return []
     active_specs = task_specs if task_specs is not None else TASK_SPECS
     if not active_specs:
         raise ValueError("task_specs must include at least one task.")
+    rng = rng or np.random.default_rng()
     if not task_weights:
-        return [active_specs[i % len(active_specs)] for i in range(n_envs)]
+        return list(rng.choice(active_specs, size=n_envs, replace=True))
 
     weights = {spec.name: float(task_weights.get(spec.name, 0.0)) for spec in active_specs}
     total = sum(weights.values())
     if total <= 0.0:
         raise ValueError("task_weights must include at least one positive value.")
 
-    normalized = {name: value / total for name, value in weights.items()}
-    raw_counts = {name: normalized[name] * n_envs for name in normalized}
-    counts = {name: int(raw_counts[name]) for name in raw_counts}
-    remainder = n_envs - sum(counts.values())
-
-    if remainder > 0:
-        fractional = [
-            (name, raw_counts[name] - counts[name]) for name in normalized
-        ]
-        order = {spec.name: index for index, spec in enumerate(active_specs)}
-        fractional.sort(key=lambda item: (-item[1], order[item[0]]))
-        for name, _ in fractional:
-            if remainder <= 0:
-                break
-            counts[name] += 1
-            remainder -= 1
-
-    task_list: List[TaskSpec] = []
-    remaining = counts.copy()
-    while len(task_list) < n_envs:
-        for spec in active_specs:
-            if remaining.get(spec.name, 0) > 0:
-                task_list.append(spec)
-                remaining[spec.name] -= 1
-            if len(task_list) >= n_envs:
-                break
-    return task_list
+    probs = np.array([weights[spec.name] for spec in active_specs], dtype=np.float64)
+    probs = probs / probs.sum()
+    return list(rng.choice(active_specs, size=n_envs, replace=True, p=probs))
 
 
 
@@ -428,8 +416,12 @@ def _matches_keywords(key: str, keywords: tuple[str, ...]) -> bool:
     return any(word in key_lower for word in keywords)
 
 
+def _normalize_reward_profile(reward_profile: str) -> str:
+    return "env" if reward_profile == "base" else reward_profile
+
+
 def _adjust_reward_config(reward_config: Dict[str, float], reward_profile: str) -> Dict[str, float]:
-    if reward_profile == "base":
+    if reward_profile not in ("pressure_shot", "tight"):
         return reward_config
     if reward_profile == "pressure_shot":
         scale_goal = 1.1
@@ -473,25 +465,64 @@ def _resolve_max_steps(env: gym.Env) -> int | None:
     return None
 
 
-def _assert_wrapper_order(env: gym.Env, has_reward_wrapper: bool) -> None:
+def _safe_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _maybe_normalize_obs(obs: np.ndarray, obs_rms, epsilon: float) -> np.ndarray:
+    if obs_rms is None:
+        return obs
+    return (obs - obs_rms.mean) / (np.sqrt(obs_rms.var) + epsilon)
+
+
+def _aggregate_reward_terms(
+    term_list: List[Dict[str, float]],
+    keys: tuple[str, ...],
+) -> Dict[str, float]:
+    if not term_list:
+        return {key: 0.0 for key in keys}
+    totals = {key: 0.0 for key in keys}
+    for terms in term_list:
+        if not isinstance(terms, dict):
+            continue
+        for key in keys:
+            totals[key] += _safe_float(terms.get(key, 0.0))
+    count = max(1, len(term_list))
+    return {key: value / count for key, value in totals.items()}
+
+
+def _assert_wrapper_order(
+    env: gym.Env,
+    has_reward_wrapper: bool,
+    has_competition_wrapper: bool = True,
+) -> None:
     order = []
     current = env
     while isinstance(current, gym.Wrapper):
         order.append(type(current))
         current = current.env
 
-    expected = [CompetitionAlignmentWrapper]
+    expected: List[type] = []
+    if has_competition_wrapper:
+        expected.append(CompetitionAlignmentWrapper)
     if has_reward_wrapper:
         expected.append(RewardProfileWrapper)
     expected.extend([PreprocessObsWrapper, CommandActionWrapper])
-
-    for index, wrapper_type in enumerate(expected):
-        if index >= len(order) or order[index] is not wrapper_type:
+    indices = []
+    for wrapper_type in expected:
+        if wrapper_type not in order:
             names = [cls.__name__ for cls in order]
-            expected_names = [cls.__name__ for cls in expected]
-            raise AssertionError(
-                f"Wrapper order mismatch. Expected {expected_names}, got {names}."
-            )
+            raise AssertionError(f"Missing wrapper {wrapper_type.__name__}. Got {names}.")
+        indices.append(order.index(wrapper_type))
+    if indices != sorted(indices):
+        names = [cls.__name__ for cls in order]
+        expected_names = [cls.__name__ for cls in expected]
+        raise AssertionError(
+            f"Wrapper order mismatch. Expected {expected_names} in order, got {names}."
+        )
 
 
 def make_env(
@@ -530,16 +561,20 @@ def make_env(
     def _init():
         env = gym.make(task_spec.env_id, render_mode=render_mode)
         base_env = env.unwrapped
+        reward_mode = _normalize_reward_profile(reward_profile)
+        if reward_mode not in ("pressure_shot", "tight") and macro_reward_bonus > 0.0:
+            raise ValueError("macro_reward_bonus requires reward_profile=pressure_shot or tight.")
         if hasattr(base_env, "goal_site"):
             base_env.goal_site = _resolve_site_name(base_env, base_env.goal_site)
         if hasattr(base_env, "target_name"):
             base_env.target_name = _resolve_site_name(base_env, base_env.target_name)
         reward_config = getattr(base_env, "reward_config", None)
-        if isinstance(reward_config, dict):
-            base_env.reward_config = _adjust_reward_config(reward_config, reward_profile)
+        if isinstance(reward_config, dict) and reward_mode in ("pressure_shot", "tight"):
+            base_env.reward_config = _adjust_reward_config(reward_config, reward_mode)
         env = CommandActionWrapper(env)
+        env = ClipAction(env)
         env = PreprocessObsWrapper(env, task_spec.one_hot)
-        if reward_profile != "base" or macro_reward_bonus > 0.0:
+        if reward_mode in ("pressure_shot", "tight"):
             reward_config = getattr(base_env, "reward_config", None)
             has_timeout_term = isinstance(reward_config, dict) and any(
                 _matches_keywords(key, _TIMEOUT_KEYWORDS) for key in reward_config
@@ -557,8 +592,13 @@ def make_env(
                 macro_reward_alignment_threshold=macro_reward_alignment_threshold,
                 macro_reward_cap=macro_reward_cap,
             )
-        env = CompetitionAlignmentWrapper(env, task_spec.name)
-        _assert_wrapper_order(env, reward_profile != "base" or macro_reward_bonus > 0.0)
+        if reward_mode == "competition":
+            env = CompetitionAlignmentWrapper(env, task_spec.name)
+        _assert_wrapper_order(
+            env,
+            has_reward_wrapper=reward_mode in ("pressure_shot", "tight"),
+            has_competition_wrapper=reward_mode == "competition",
+        )
         if seed is not None:
             env.reset(seed=seed)
         return env
@@ -598,9 +638,11 @@ def evaluate_policy(
     reward_profile: str = "base",
     macro_reward_bonus: float = 0.0,
     macro_reward_radius: float = 0.6,
+    obs_rms=None,
+    obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
-) -> Tuple[float, List[float], List[int], int | None]:
+) -> Tuple[float, List[float], List[int], int | None, List[Dict[str, float]]]:
     env = make_env(
         task_spec,
         seed=seed,
@@ -613,20 +655,23 @@ def evaluate_policy(
     scores: List[float] = []
     lengths: List[int] = []
     max_steps = _resolve_max_steps(env)
+    reward_terms_list: List[Dict[str, float]] = []
 
     for ep in range(episodes):
         obs, info = env.reset(seed=seed + ep)
+        model_obs = _maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
         terminated = truncated = False
         steps = 0
         reward_terms = {}
 
         while not (terminated or truncated):
             if hasattr(model, "predict"):
-                action, _ = model.predict(obs, deterministic=deterministic)
+                action, _ = model.predict(model_obs, deterministic=deterministic)
             else:
-                action = model(obs)
+                action = model(model_obs)
             obs, _, terminated, truncated, info = env.step(action)
             reward_terms = info.get("reward_terms", reward_terms)
+            model_obs = _maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
             steps += 1
 
         reward_config = getattr(env.unwrapped, "reward_config", {})
@@ -635,9 +680,10 @@ def evaluate_policy(
         score = compute_terminal_score(reward_terms, reward_config, steps, steps_weight)
         scores.append(score)
         lengths.append(steps)
+        reward_terms_list.append(reward_terms if isinstance(reward_terms, dict) else {})
 
     env.close()
-    return float(np.mean(scores)), scores, lengths, max_steps
+    return float(np.mean(scores)), scores, lengths, max_steps, reward_terms_list
 
 
 def evaluate_policy_competition(
@@ -649,9 +695,11 @@ def evaluate_policy_competition(
     reward_profile: str = "base",
     macro_reward_bonus: float = 0.0,
     macro_reward_radius: float = 0.6,
+    obs_rms=None,
+    obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
-) -> Tuple[float, List[Dict[str, float]]]:
+) -> Tuple[float, List[Dict[str, float]], List[Dict[str, float]]]:
     env = make_env(
         task_spec,
         seed=seed,
@@ -662,29 +710,33 @@ def evaluate_policy_competition(
         macro_reward_cap=macro_reward_cap,
     )()
     reports: List[Dict[str, float]] = []
+    reward_terms_list: List[Dict[str, float]] = []
 
     for ep in range(episodes):
         obs, info = env.reset(seed=seed + ep)
+        model_obs = _maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
         terminated = truncated = False
         steps = 0
         reward_terms: Dict[str, float] = {}
 
         while not (terminated or truncated):
             if hasattr(model, "predict"):
-                action, _ = model.predict(obs, deterministic=deterministic)
+                action, _ = model.predict(model_obs, deterministic=deterministic)
             else:
-                action = model(obs)
+                action = model(model_obs)
             obs, _, terminated, truncated, info = env.step(action)
             current_terms = info.get("reward_terms", reward_terms)
             reward_terms = current_terms if isinstance(current_terms, dict) else reward_terms
+            model_obs = _maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
             steps += 1
 
         report = compute_competition_report(reward_terms, task_spec.name, steps)
         reports.append(report)
+        reward_terms_list.append(reward_terms if isinstance(reward_terms, dict) else {})
 
     env.close()
     mean_comp_total = float(np.mean([report["comp_total"] for report in reports])) if reports else 0.0
-    return mean_comp_total, reports
+    return mean_comp_total, reports, reward_terms_list
 
 
 def evaluate_all_tasks(
@@ -697,6 +749,8 @@ def evaluate_all_tasks(
     reward_profile: str = "base",
     macro_reward_bonus: float = 0.0,
     macro_reward_radius: float = 0.6,
+    obs_rms=None,
+    obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
 ) -> Dict[str, float]:
@@ -711,6 +765,8 @@ def evaluate_all_tasks(
         reward_profile=reward_profile,
         macro_reward_bonus=macro_reward_bonus,
         macro_reward_radius=macro_reward_radius,
+        obs_rms=obs_rms,
+        obs_rms_epsilon=obs_rms_epsilon,
         macro_reward_alignment_threshold=macro_reward_alignment_threshold,
         macro_reward_cap=macro_reward_cap,
     )
@@ -727,6 +783,8 @@ def evaluate_selected_tasks(
     reward_profile: str = "base",
     macro_reward_bonus: float = 0.0,
     macro_reward_radius: float = 0.6,
+    obs_rms=None,
+    obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
 ) -> Dict[str, float]:
@@ -737,10 +795,11 @@ def evaluate_selected_tasks(
     per_task_scores: Dict[str, List[float]] = {task.name: [] for task in task_specs}
     all_lengths: List[int] = []
     max_steps = None
+    per_task_terms: Dict[str, List[Dict[str, float]]] = {task.name: [] for task in task_specs}
 
     for seed_value in seeds:
         for task_index, task_spec in enumerate(task_specs):
-            mean_score, _, lengths, task_max_steps = evaluate_policy(
+            mean_score, _, lengths, task_max_steps, reward_terms_list = evaluate_policy(
                 model,
                 task_spec,
                 episodes=episodes,
@@ -750,17 +809,24 @@ def evaluate_selected_tasks(
                 reward_profile=reward_profile,
                 macro_reward_bonus=macro_reward_bonus,
                 macro_reward_radius=macro_reward_radius,
+                obs_rms=obs_rms,
+                obs_rms_epsilon=obs_rms_epsilon,
                 macro_reward_alignment_threshold=macro_reward_alignment_threshold,
                 macro_reward_cap=macro_reward_cap,
             )
             per_task_scores[task_spec.name].append(mean_score)
             all_lengths.extend(lengths)
+            per_task_terms[task_spec.name].extend(reward_terms_list)
             if task_max_steps is not None:
                 max_steps = task_max_steps if max_steps is None else max(max_steps, task_max_steps)
 
     per_task = {name: float(np.mean(scores)) for name, scores in per_task_scores.items()}
     overall = float(np.mean(list(per_task.values()))) if per_task else 0.0
     per_task["S_overall"] = overall
+    for task_name, term_list in per_task_terms.items():
+        term_means = _aggregate_reward_terms(term_list, _EVAL_TERM_KEYS)
+        for term_key, term_value in term_means.items():
+            per_task[f"{task_name}/{term_key}_mean"] = float(term_value)
     if all_lengths:
         ep_len_mean = float(np.mean(all_lengths))
         per_task["ep_len_mean"] = ep_len_mean
@@ -781,6 +847,8 @@ def evaluate_all_tasks_competition(
     reward_profile: str = "base",
     macro_reward_bonus: float = 0.0,
     macro_reward_radius: float = 0.6,
+    obs_rms=None,
+    obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
 ) -> Dict[str, float]:
@@ -794,6 +862,8 @@ def evaluate_all_tasks_competition(
         reward_profile=reward_profile,
         macro_reward_bonus=macro_reward_bonus,
         macro_reward_radius=macro_reward_radius,
+        obs_rms=obs_rms,
+        obs_rms_epsilon=obs_rms_epsilon,
         macro_reward_alignment_threshold=macro_reward_alignment_threshold,
         macro_reward_cap=macro_reward_cap,
     )
@@ -809,6 +879,8 @@ def evaluate_selected_tasks_competition(
     reward_profile: str = "base",
     macro_reward_bonus: float = 0.0,
     macro_reward_radius: float = 0.6,
+    obs_rms=None,
+    obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
 ) -> Dict[str, float]:
@@ -817,10 +889,11 @@ def evaluate_selected_tasks_competition(
         seeds = [seed]
 
     per_task_reports: Dict[str, List[Dict[str, float]]] = {task.name: [] for task in task_specs}
+    per_task_terms: Dict[str, List[Dict[str, float]]] = {task.name: [] for task in task_specs}
 
     for seed_value in seeds:
         for task_index, task_spec in enumerate(task_specs):
-            _, reports = evaluate_policy_competition(
+            _, reports, reward_terms_list = evaluate_policy_competition(
                 model,
                 task_spec,
                 episodes=episodes,
@@ -829,10 +902,13 @@ def evaluate_selected_tasks_competition(
                 reward_profile=reward_profile,
                 macro_reward_bonus=macro_reward_bonus,
                 macro_reward_radius=macro_reward_radius,
+                obs_rms=obs_rms,
+                obs_rms_epsilon=obs_rms_epsilon,
                 macro_reward_alignment_threshold=macro_reward_alignment_threshold,
                 macro_reward_cap=macro_reward_cap,
             )
             per_task_reports[task_spec.name].extend(reports)
+            per_task_terms[task_spec.name].extend(reward_terms_list)
 
     results: Dict[str, float] = {}
     comp_total_sum = 0.0
@@ -848,6 +924,9 @@ def evaluate_selected_tasks_competition(
         for component in COMP_REWARD_CONFIG[task_name].keys():
             key = f"comp_{component}"
             results[f"{task_name}/{key}"] = float(aggregated.get(key, 0.0))
+        term_means = _aggregate_reward_terms(per_task_terms[task_name], _EVAL_TERM_KEYS)
+        for term_key, term_value in term_means.items():
+            results[f"{task_name}/{term_key}_mean"] = float(term_value)
         comp_total_sum += float(aggregated["comp_total"])
 
     results["comp_total_sum"] = float(comp_total_sum)

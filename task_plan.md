@@ -71,3 +71,40 @@ Add HF auth/cache passthrough to training and evaluation-mode checkpoint chainin
 - [x] Phase 2: Add HF env wiring + legacy-only eval support in training
 - [x] Phase 3: Add eval-mode flags + checkpoint selection in overnight runner
 - [x] Phase 4: Update notes and verification guidance
+
+---
+
+# Task Plan: Implementation Checklist + Diffs
+
+## Goal
+
+Deliver a concrete implementation checklist with exact diffs and a short migration note for the Booster Soccer RL audit items.
+
+## Phases
+
+- [x] Phase 1: Plan and setup
+- [x] Phase 2: Gather file context and constraints
+- [x] Phase 3: Draft checklist and exact diffs
+- [x] Phase 4: Add migration note and finalize deliverable
+
+## Key Questions
+
+1. Which files own task assignment, wrappers, and evaluation flow?
+2. Where should VecNormalize stats be applied and loaded for eval?
+3. How to keep reward mode selection backward compatible?
+
+## Decisions Made
+
+- Use SB3 `VecNormalize` for observation normalization and pass obs_rms into eval utilities.
+- Keep per-env tasks fixed for each VecEnv slot while randomizing initial assignment.
+- Extend `--reward-profile` to include env/competition while mapping `base -> env`.
+
+## Errors Encountered
+
+- [2026-01-05] Smoke eval setup: system python missing stable_baselines3; switched to .venv.
+- [2026-01-05] Smoke eval setup: import failed on competition_scoring; added training_scripts to sys.path for snippet.
+- [2026-01-05] Smoke eval with --vecnormalize timed out at 120s; reran with 240s timeout and completed.
+
+## Status
+
+**Step 6 applied** - Steps 2-6 complete (Step2/4/6 required no code changes; Step3 README updated; Step5 training metrics logging)

@@ -230,6 +230,12 @@ python training_scripts/train_multitask.py \
   --save-dir training_runs/multitask_td3
 ```
 
+Notes:
+- `--reward-profile` now supports `env` and `competition`; `base` is treated as `env`.
+- `--normalize-obs` enables VecNormalize and writes `vecnormalize.pkl` to the save dir.
+  Pass `--vecnormalize-path` when resuming or `--vecnormalize` in eval scripts.
+- `--eval-seeds-random N` draws N random eval seeds (seeded by `--seed`).
+
 ### 4) Terminal-Only Evaluation (S1/S2/S3, S_overall)
 
 ```bash

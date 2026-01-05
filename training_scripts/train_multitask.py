@@ -9,7 +9,7 @@ from stable_baselines3 import TD3
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.utils import get_schedule_fn
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
 
 from multitask_utils import (
     TASK_SPECS,
@@ -46,6 +46,8 @@ class MultiTaskEvalCallback(BaseCallback):
         macro_reward_cap: float,
         competition_only_eval: bool,
         legacy_only_eval: bool,
+        obs_rms=None,
+        obs_rms_epsilon: float = 1e-8,
         deterministic: bool = True,
     ):
         super().__init__()
@@ -65,6 +67,8 @@ class MultiTaskEvalCallback(BaseCallback):
         self.competition_only_eval = competition_only_eval
         self.legacy_only_eval = legacy_only_eval
         self.deterministic = deterministic
+        self.obs_rms = obs_rms
+        self.obs_rms_epsilon = obs_rms_epsilon
         self.best_score = -np.inf
         self.best_comp_score = -np.inf
 
@@ -85,6 +89,8 @@ class MultiTaskEvalCallback(BaseCallback):
                 reward_profile=self.reward_profile,
                 macro_reward_bonus=self.macro_reward_bonus,
                 macro_reward_radius=self.macro_reward_radius,
+                obs_rms=self.obs_rms,
+                obs_rms_epsilon=self.obs_rms_epsilon,
                 macro_reward_alignment_threshold=self.macro_reward_alignment_threshold,
                 macro_reward_cap=self.macro_reward_cap,
             )
@@ -100,6 +106,8 @@ class MultiTaskEvalCallback(BaseCallback):
                 reward_profile=self.reward_profile,
                 macro_reward_bonus=self.macro_reward_bonus,
                 macro_reward_radius=self.macro_reward_radius,
+                obs_rms=self.obs_rms,
+                obs_rms_epsilon=self.obs_rms_epsilon,
                 macro_reward_alignment_threshold=self.macro_reward_alignment_threshold,
                 macro_reward_cap=self.macro_reward_cap,
             )
@@ -169,6 +177,13 @@ def parse_eval_seeds(raw: str | None) -> list[int]:
     if not tokens:
         return [0]
     return [int(token) for token in tokens]
+
+
+def resolve_eval_seeds(raw: str | None, random_count: int, seed: int) -> list[int]:
+    if random_count and random_count > 0:
+        rng = np.random.default_rng(seed)
+        return list(map(int, rng.integers(0, 10_000, size=random_count)))
+    return parse_eval_seeds(raw)
 
 
 def parse_task_weights(raw: str | None) -> dict[str, float] | None:
@@ -247,6 +262,9 @@ def main() -> None:
     parser.add_argument("--macro-reward-radius", type=float, default=0.6)
     parser.add_argument("--macro-reward-alignment-threshold", type=float, default=0.6)
     parser.add_argument("--macro-reward-cap", type=float, default=0.5)
+    parser.add_argument("--eval-seeds-random", type=int, default=0)
+    parser.add_argument("--normalize-obs", action="store_true")
+    parser.add_argument("--vecnormalize-path", type=str, default=None)
     parser.add_argument(
         "--competition-only-eval",
         action="store_true",
@@ -273,7 +291,7 @@ def main() -> None:
         "--reward-profile",
         type=str,
         default="base",
-        choices=["base", "pressure_shot", "tight"],
+        choices=["base", "env", "competition", "pressure_shot", "tight"],
     )
     parser.add_argument("--save-dir", type=str, default="training_runs/multitask_td3")
     args = parser.parse_args()
@@ -299,11 +317,20 @@ def main() -> None:
     torch.backends.cudnn.benchmark = True
 
     net_arch = [int(v.strip()) for v in args.net_arch.split(",") if v.strip()]
-    eval_seeds = parse_eval_seeds(args.eval_seeds)
+    eval_seeds = resolve_eval_seeds(args.eval_seeds, args.eval_seeds_random, args.seed)
 
     active_task_specs = parse_tasks(args.tasks)
     task_weights = parse_task_weights(args.task_weights)
-    task_list = build_task_list(args.n_envs, task_weights, task_specs=active_task_specs)
+    reward_mode = "env" if args.reward_profile == "base" else args.reward_profile
+    if reward_mode in ("env", "competition") and args.macro_reward_bonus > 0.0:
+        raise ValueError("macro_reward_bonus requires reward_profile=pressure_shot or tight.")
+    task_rng = np.random.default_rng(args.seed)
+    task_list = build_task_list(
+        args.n_envs,
+        task_weights,
+        task_specs=active_task_specs,
+        rng=task_rng,
+    )
     env_fns = []
     for i, task_spec in enumerate(task_list):
         env_fns.append(
@@ -318,12 +345,27 @@ def main() -> None:
             )
         )
 
-    has_reward_wrapper = args.reward_profile != "base" or args.macro_reward_bonus > 0.0
+    has_reward_wrapper = reward_mode in ("pressure_shot", "tight")
     info_keywords = ("macro_reward_bonus_mean",) if has_reward_wrapper else ()
     vec_env = VecMonitor(
         DummyVecEnv(env_fns),
         info_keywords=info_keywords,
     )
+    vec_normalize = None
+    if args.normalize_obs:
+        if args.vecnormalize_path:
+            vec_normalize = VecNormalize.load(args.vecnormalize_path, vec_env)
+            vec_normalize.training = True
+            vec_normalize.norm_reward = False
+            vec_env = vec_normalize
+        else:
+            vec_normalize = VecNormalize(
+                vec_env,
+                norm_obs=True,
+                norm_reward=False,
+                clip_obs=10.0,
+            )
+            vec_env = vec_normalize
 
     n_actions = int(vec_env.action_space.shape[0])
     action_noise = None
@@ -379,6 +421,8 @@ def main() -> None:
         eval_seeds=eval_seeds,
         reward_profile=args.reward_profile,
         macro_reward_bonus=args.macro_reward_bonus,
+        obs_rms=vec_normalize.obs_rms if vec_normalize is not None else None,
+        obs_rms_epsilon=vec_normalize.epsilon if vec_normalize is not None else 1e-8,
         macro_reward_radius=args.macro_reward_radius,
         macro_reward_alignment_threshold=args.macro_reward_alignment_threshold,
         macro_reward_cap=args.macro_reward_cap,
@@ -391,6 +435,8 @@ def main() -> None:
 
     final_path = save_dir / "final_model.zip"
     model.save(final_path)
+    if vec_normalize is not None:
+        vec_normalize.save(save_dir / "vecnormalize.pkl")
     print(f"Saved final model to {final_path}")
 
 
