@@ -247,3 +247,17 @@ python training_scripts/eval_multitask.py \
   --steps-weight -0.001 \
   --deterministic
 ```
+
+---
+
+## Multitask PPO Training Workflow
+
+This workflow describes how our multitask PPO setup runs end-to-end. It assumes a single shared policy/value network across tasks, conditioned on the active task.
+
+1. Task setup and environment build. Select the task set (and optional weights), then build a vectorized batch of environments so every rollout mixes tasks. Each env is wrapped so observations are normalized and augmented with a task one-hot, and actions are interpreted as command-level inputs (with optional macro triggers).
+2. Rollout collection. Run the current policy for a fixed horizon per environment and record rewards, dones, and diagnostic info used by both legacy and competition-style scoring.
+3. Advantage and return computation. Use the value head to compute GAE and returns, normalize advantages, and keep task mixing by pooling rollouts from all environments.
+4. PPO optimization. Optimize the clipped surrogate objective plus value loss and entropy bonus across multiple epochs/minibatches, using ratio/value clipping and gradient clipping for stability.
+5. Evaluation and checkpointing. Periodically evaluate across all tasks, compute aggregate scores (S_overall and competition totals), save the best checkpoint, and resume or fine-tune as needed.
+
+Optional motion data path (mimic and .npz files). Motion .npz files live in the dataset and can be replayed with `mimic/visualize_data.py` or enriched with `mimic/forward_kinematics.py`. If you want imitation warm starts, convert motion .npz files into command-level training data with `training_scripts/build_bc_dataset.py`, pretrain a policy with `training_scripts/bc_train.py`, and then use those weights to initialize multitask PPO before fine-tuning with rollouts.

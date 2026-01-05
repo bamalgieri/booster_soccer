@@ -3,7 +3,7 @@ from pathlib import Path
 
 from stable_baselines3 import TD3
 
-from multitask_utils import TASK_SPECS, evaluate_all_tasks
+from multitask_utils import TASK_SPECS, evaluate_all_tasks, evaluate_all_tasks_competition
 
 
 def generate_report_card(per_task_scores):
@@ -56,12 +56,25 @@ def main() -> None:
         deterministic=args.deterministic,
         seed=0,
     )
+    comp_scores = evaluate_all_tasks_competition(
+        model,
+        episodes=args.episodes,
+        deterministic=args.deterministic,
+        seed=0,
+    )
 
     print("Per-task terminal scores:")
     for task in TASK_SPECS:
         print(f"  {task.name}: {scores[task.name]:.4f}")
     print(f"S_overall: {scores['S_overall']:.4f}")
     generate_report_card(scores)
+    print("")
+    print("Competition scoring (episode-end, website-aligned):")
+    for task in TASK_SPECS:
+        key = f"{task.name}/comp_total"
+        if key in comp_scores:
+            print(f"  {task.name}: {comp_scores[key]:.4f}")
+    print(f"comp_total_sum: {comp_scores['comp_total_sum']:.4f}")
 
 
 if __name__ == "__main__":

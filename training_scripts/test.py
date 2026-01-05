@@ -41,10 +41,10 @@ def resolve_model_filename(env_id: str) -> str:
     """
     env_lc = env_id.lower()
     if "goalie" in env_lc:
-        # return "training_runs/overnight_20260102_231947/stage1/best_model.zip"
+        # return "training_runs/overnight_20260102_231947/stage2/best_model.zip"
          return "models/td3_goalie_penalty_kick.zip"
     if "kick" in env_lc:
-        # return "training_runs/overnight_20260102_231947/stage1/best_model.zip"
+        # return "training_runs/overnight_20260102_231947/stage2/best_model.zip"
         # Adjust if your repo uses a different filename for the kicker model
         return "models/sac_kick_to_target.zip"
     raise ValueError(
