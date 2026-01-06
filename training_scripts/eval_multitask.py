@@ -50,20 +50,35 @@ def main() -> None:
     parser.add_argument("--steps-weight", type=float, default=-0.001)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--deterministic", action="store_true")
-    parser.add_argument("--vecnormalize", type=str, default=None)
+    parser.add_argument(
+        "--vecnormalize-path",
+        dest="vecnormalize_path",
+        type=str,
+        default=None,
+        help="Path to VecNormalize stats (vecnormalize.pkl) to normalize observations.",
+    )
+    parser.add_argument(
+        "--vecnormalize",
+        dest="vecnormalize_path",
+        type=str,
+        default=None,
+        help="Deprecated alias for --vecnormalize-path.",
+    )
     args = parser.parse_args()
 
     model_path = Path(args.model)
     model = TD3.load(model_path, device=args.device)
     obs_rms = None
     obs_rms_epsilon = 1e-8
-    if args.vecnormalize:
+    if args.vecnormalize_path:
+        vecnormalize_path = Path(args.vecnormalize_path)
         dummy_env = DummyVecEnv([make_env(TASK_SPECS[0])])
-        vec_norm = VecNormalize.load(args.vecnormalize, dummy_env)
+        vec_norm = VecNormalize.load(vecnormalize_path, dummy_env)
         vec_norm.training = False
         vec_norm.norm_reward = False
         obs_rms = vec_norm.obs_rms
         obs_rms_epsilon = vec_norm.epsilon
+        print(f"[eval] Loaded VecNormalize stats from {vecnormalize_path}")
 
     scores = evaluate_all_tasks(
         model,

@@ -5,7 +5,6 @@ from typing import Callable, Dict, List, Tuple
 
 import gymnasium as gym
 from gymnasium import spaces
-from gymnasium.wrappers import ClipAction
 import numpy as np
 
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -212,6 +211,17 @@ class CommandActionWrapper(gym.ActionWrapper):
         self._macro_step_index = -1
         self._macro_end_after_step = False
         return obs, reward, terminated, truncated, info
+
+
+class BoundedClipAction(gym.ActionWrapper):
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        self.action_space = env.action_space
+
+    def action(self, action):
+        if not isinstance(self.action_space, spaces.Box):
+            return action
+        return np.clip(action, self.action_space.low, self.action_space.high)
 
 
 class PreprocessObsWrapper(gym.Wrapper):
@@ -572,7 +582,7 @@ def make_env(
         if isinstance(reward_config, dict) and reward_mode in ("pressure_shot", "tight"):
             base_env.reward_config = _adjust_reward_config(reward_config, reward_mode)
         env = CommandActionWrapper(env)
-        env = ClipAction(env)
+        env = BoundedClipAction(env)
         env = PreprocessObsWrapper(env, task_spec.one_hot)
         if reward_mode in ("pressure_shot", "tight"):
             reward_config = getattr(base_env, "reward_config", None)

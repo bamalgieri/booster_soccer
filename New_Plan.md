@@ -170,7 +170,7 @@ Pre-filling with demonstration transitions may bias the early gradient updates; 
 
 Show the diff adding flags and the pre-fill logic; summarise the number of transitions inserted during smoke test.
 
-### Prompt 4: (untitled)
+### Prompt 4: Implement BC layer freezing option
 
 **Objective:**
 
@@ -318,9 +318,9 @@ score, _, _, _ = evaluate_policy(actor, TASK_SPECS[0], episodes=5, steps_weight=
 print('BC score:', score)
 ```
 
-2. _Optional IQL._ ( If the repository adds an IQL implementation in the future, train it using 'imitation_learning/train.py'. Otherwise, proceed to RL fine-tuning.
+2. _Optional IQL._ If the repository adds an IQL implementation in the future, train it using 'imitation_learning/train.py'. Otherwise, proceed to RL fine-tuning.
 
-3. \*Aggregate BC weights.( Use the BC weight file as the '--bc-weights' input when running multi-task RL. The actor will be initialised with these weights.
+3. _Aggregate BC weights._ Use the BC weight file as the '--bc-weights' input when running multi-task RL. The actor will be initialised with these weights.
 
 ### Day 1.5 - Multi-task RL fine-tuning
 
@@ -370,7 +370,9 @@ Confirm that 'comp_total_sum' is close to or exceeds 10.0.
    required, convert the actor network using a custom script (not included here). Otherwise, submit
    'best_model_competition.zip' and the accompanying 'vecnormalize.pkl'.
 
-### **Expected metrics:** BC policies typically achieve terminal scores of 4-6 per task. After fine-tuning with PPO/SAC and macro-assisted exploration, the competition sum should rise to ≈10. Watch the 'comp_eval/C_overall' metric; improvements should be monotonic if the reward alignment is correct.
+### **Expected metrics:**
+
+BC policies typically achieve terminal scores of 4-6 per task. After fine-tuning with PPO/SAC and macro-assisted exploration, the competition sum should rise to ≈10. Watch the 'comp_eval/C_overall' metric; improvements should be monotonic if the reward alignment is correct.
 
 ## Guardrails
 

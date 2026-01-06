@@ -70,6 +70,14 @@ If you already have a trained model:
 python training_scripts/eval_multitask.py --model path\to\best_model.zip --episodes 5 --deterministic
 ```
 
+If the model was trained with `--normalize-obs`, load the matching stats:
+
+```powershell
+python training_scripts/eval_multitask.py --model path\to\best_model.zip --episodes 5 --deterministic --vecnormalize-path training_runs\multitask_td3\vecnormalize.pkl
+```
+
+Use the `vecnormalize.pkl` from the same training run to avoid shape mismatches.
+
 This prints:
 
 - Per-task terminal scores (old env-style metrics)
@@ -211,6 +219,7 @@ and simple "light load" vs "heavier load" suggestions.
 | `--n-envs`                           | `6`                             | Number of parallel environments.   | `2` or `4`        | `8` or `12`                    |
 | `--seed`                             | `0`                             | Random seed for reproducibility.   | keep default      | keep default                   |
 | `--device`                           | `"cuda"`                        | Compute device (`cuda` or `cpu`).  | `cpu` if no GPU   | `cuda`                         |
+| `--algo`                             | `"td3"`                         | RL algorithm (`td3`, `ppo`, `sac`). | `"td3"`           | `"ppo"` or `"sac"`             |
 | `--net-arch`                         | `"256,256,128"`                 | Policy MLP sizes.                  | `"128,128"`       | `"256,256,256"`                |
 | `--lr`                               | `3e-4`                          | Learning rate.                     | keep default      | keep default                   |
 | `--tau`                              | `0.005`                         | Target network update rate.        | keep default      | keep default                   |
@@ -219,10 +228,16 @@ and simple "light load" vs "heavier load" suggestions.
 | `--batch-size`                       | `256`                           | Training batch size.               | `128`             | `512`                          |
 | `--learning-starts`                  | `20000`                         | Steps before learning starts.      | `5000`            | `50000`                        |
 | `--eval-episodes`                    | `8`                             | Episodes per task per seed.        | `2`               | `20`                           |
-| `--eval-seeds`                       | `"0"`                           | Eval seed list (comma-separated).  | `"0"`             | `"0,1,2,3,4"`                  |
+| `--eval-seeds`                       | `"0,1,2,3"`                     | Eval seed list (comma-separated).  | `"0"`             | `"0,1,2,3,4"`                  |
 | `--eval-freq`                        | `50000`                         | How often to run eval (timesteps). | `200000`          | `10000`                        |
 | `--steps-weight`                     | `-0.05`                         | Legacy eval step penalty only.     | keep default      | keep default                   |
+| `--normalize-obs`                    | `False`                         | Normalize observations with VecNormalize. | `False`     | `True`                         |
+| `--vecnormalize-path`                | `None`                          | Load/save VecNormalize stats.      | n/a               | n/a                            |
 | `--bc-weights`                       | `None`                          | Path to BC weights for init.       | n/a               | n/a                            |
+| `--freeze-bc-layers`                 | `0`                             | Freeze first N actor Linear layers (requires `--bc-weights`). | `0` | `2` |
+| `--freeze-until-step`                | `0`                             | Timesteps to keep BC layers frozen. | `0`              | `200000`                       |
+| `--bc-replay-dataset`                | `None`                          | Demo replay dataset (`.npz`) for prefill. | n/a       | n/a                            |
+| `--bc-replay-fraction`               | `0.0`                           | Fraction of replay buffer to prefill. | `0.0`         | `0.1`                          |
 | `--resume-model`                     | `None`                          | Path to resume checkpoint.         | n/a               | n/a                            |
 | `--macro-reward-bonus`               | `0.0`                           | Extra reward for good macro use.   | `0.0`             | `0.25` to `0.5`                |
 | `--macro-reward-radius`              | `0.6`                           | Ball distance gate for bonus.      | keep default      | keep default                   |
@@ -237,10 +252,27 @@ python training_scripts/train_multitask.py --total-timesteps 200000 --n-envs 2 -
 
 python train_multitask.py --total-timesteps --n-envs --action-noise-sigma --buffer-size --batch-size --learning-starts --eval-episodes --eval-freq --macro-reward-bonus --competition-only-eval --save-dir
 
-Tip: If you want faster runs, lower `eval-episodes`, set `eval-seeds` to a single seed,
-and increase `eval-freq` so evaluation happens less often.
+Tip: Defaults use 4 eval seeds (`0,1,2,3`), so evaluation is slower. If you want faster runs,
+lower `eval-episodes`, set `--eval-seeds "0"`, and increase `eval-freq` so evaluation happens
+less often.
 
-### B) overnight_3stage.py flags
+### B) 2-day workflow examples (condensed)
+
+Day 1: build the BC dataset and train a BC policy.
+
+```powershell
+python training_scripts/build_bc_dataset.py --input-root booster_dataset/soccer/booster_lower_t1 --output booster_dataset/imitation_learning/bc_commands.npz --enable-sentinels --context-mode sentinel
+python training_scripts/bc_train.py --dataset booster_dataset/imitation_learning/bc_commands.npz --out training_runs/bc_actor.pt --net-arch 256,256 --epochs 40 --batch-size 1024 --lr 3e-4 --seed 0
+```
+
+Day 2: multi-task RL fine-tuning and evaluation.
+
+```powershell
+python training_scripts/train_multitask.py --algo ppo --total-timesteps 5000000 --n-envs 32 --task-weights goalie_penalty_kick=1,obstacle_penalty_kick=1,kick_to_target=1 --bc-weights training_runs/bc_actor.pt --freeze-bc-layers 2 --freeze-until-step 200000 --bc-replay-dataset booster_dataset/imitation_learning/bc_commands.npz --bc-replay-fraction 0.1 --normalize-obs --save-dir training_runs/multitask_ppo --competition-only-eval --eval-freq 100000 --eval-episodes 4 --eval-seeds 0,1,2,3
+python training_scripts/eval_multitask.py --model training_runs/multitask_ppo/best_model_competition.zip --episodes 20 --deterministic --vecnormalize-path training_runs/multitask_ppo/vecnormalize.pkl
+```
+
+### C) overnight_3stage.py flags
 
 Note: This script sets many training hyperparameters internally per stage.
 The flags below only override the exposed knobs.
