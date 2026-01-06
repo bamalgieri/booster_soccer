@@ -3,6 +3,7 @@
 ## Sources
 
 - SKILL.md
+- New_Plan.md
 - reference.md
 - examples.md
 
