@@ -292,7 +292,7 @@ np.savez('bc_val.npz', observations=obs[val_idx], actions=acts[val_idx])
 1. _Behavioural cloning training._ Train a BC policy for each task:
 
 ```bash
-python training_scripts/bc_train.py --dataset bc_train.npz --out training_runs/bc_actor.pt \
+python training_scripts/bc_train.py --dataset bc_commands.npz  --out training_runs/bc_actor.pt \
 --net-arch 256,256 --epochs 40 --batch-size 1024 --lr 3e-4 --seed 0
 ```
 

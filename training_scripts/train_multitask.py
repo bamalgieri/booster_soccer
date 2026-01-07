@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 from pathlib import Path
 
@@ -209,6 +210,23 @@ class FreezeBCLayersCallback(BaseCallback):
         return True
 
 
+class EntropyFloorCallback(BaseCallback):
+    def __init__(self, min_ent_coef: float):
+        super().__init__()
+        self.min_ent_coef = float(min_ent_coef)
+        self._log_min = math.log(self.min_ent_coef)
+
+    def _on_step(self) -> bool:
+        log_ent_coef = getattr(self.model, "log_ent_coef", None)
+        if log_ent_coef is None:
+            return True
+        with torch.no_grad():
+            current = torch.exp(log_ent_coef)
+            if torch.any(current < self.min_ent_coef):
+                log_ent_coef.copy_(torch.full_like(log_ent_coef, self._log_min))
+        return True
+
+
 def split_bc_state_dict(
     state_dict: dict[str, torch.Tensor],
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
@@ -332,6 +350,23 @@ def main() -> None:
     parser.add_argument("--net-arch", type=str, default="256,256,128")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--tau", type=float, default=0.005)
+    parser.add_argument(
+        "--ent-coef",
+        type=float,
+        default=None,
+        help="Fixed entropy coefficient for PPO/SAC (default: PPO=0.01, SAC=auto).",
+    )
+    parser.add_argument(
+        "--ent-coef-auto",
+        action="store_true",
+        help="Enable SAC automatic entropy tuning (SAC only).",
+    )
+    parser.add_argument(
+        "--ent-coef-min",
+        type=float,
+        default=None,
+        help="Lower bound for SAC auto entropy coefficient (requires --ent-coef-auto).",
+    )
     parser.add_argument("--action-noise-sigma", type=float, default=0.0)
     parser.add_argument("--buffer-size", type=int, default=500_000)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -424,6 +459,17 @@ def main() -> None:
         raise ValueError("Only one of --competition-only-eval or --legacy-only-eval may be set.")
     if not 0.0 <= args.bc_replay_fraction <= 1.0:
         raise ValueError("--bc-replay-fraction must be within [0, 1].")
+    if args.ent_coef is not None and args.ent_coef < 0.0:
+        raise ValueError("--ent-coef must be non-negative.")
+    if args.ent_coef_auto and args.ent_coef is not None:
+        raise ValueError("--ent-coef-auto cannot be used with --ent-coef.")
+    if args.ent_coef_min is not None:
+        if args.ent_coef_min < 0.0:
+            raise ValueError("--ent-coef-min must be non-negative.")
+        if not args.ent_coef_auto:
+            raise ValueError("--ent-coef-min requires --ent-coef-auto.")
+    if args.ent_coef_auto and args.algo.lower() != "sac":
+        raise ValueError("--ent-coef-auto is only supported for SAC.")
 
     if args.hf_home:
         hub_cache = os.path.join(args.hf_home, "hub")
@@ -541,13 +587,14 @@ def main() -> None:
                 verbose=1,
             )
         elif algo == "ppo":
+            ent_coef = args.ent_coef if args.ent_coef is not None else 0.01
             model = PPO(
                 "MlpPolicy",
                 vec_env,
                 n_steps=2048,
                 gamma=0.99,
                 gae_lambda=0.95,
-                ent_coef=0.01,
+                ent_coef=ent_coef,
                 learning_rate=args.lr,
                 clip_range=0.2,
                 batch_size=args.batch_size,
@@ -557,6 +604,11 @@ def main() -> None:
                 verbose=1,
             )
         elif algo == "sac":
+            sac_kwargs = {}
+            if args.ent_coef is not None:
+                sac_kwargs["ent_coef"] = args.ent_coef
+            elif args.ent_coef_auto:
+                sac_kwargs["ent_coef"] = "auto"
             model = SAC(
                 "MlpPolicy",
                 vec_env,
@@ -571,6 +623,7 @@ def main() -> None:
                 device=args.device,
                 seed=args.seed,
                 verbose=1,
+                **sac_kwargs,
             )
         else:
             raise ValueError(f"Unsupported algo selection: {algo}")
@@ -686,9 +739,12 @@ def main() -> None:
         deterministic=True,
     )
 
-    callback = eval_cb
+    callbacks = [eval_cb]
     if frozen_params:
-        callback = [eval_cb, FreezeBCLayersCallback(frozen_params, args.freeze_until_step)]
+        callbacks.append(FreezeBCLayersCallback(frozen_params, args.freeze_until_step))
+    if args.ent_coef_auto and args.ent_coef_min is not None and algo == "sac":
+        callbacks.append(EntropyFloorCallback(args.ent_coef_min))
+    callback = callbacks[0] if len(callbacks) == 1 else callbacks
     model.learn(total_timesteps=args.total_timesteps, callback=callback)
 
     final_path = save_dir / "final_model.zip"

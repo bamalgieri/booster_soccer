@@ -213,40 +213,40 @@ and simple "light load" vs "heavier load" suggestions.
 
 ### A) train_multitask.py flags
 
-| Flag                                 | Default                         | What it does                       | Light load option | Heavier load option            |
-| ------------------------------------ | ------------------------------- | ---------------------------------- | ----------------- | ------------------------------ |
-| `--total-timesteps`                  | `1000000`                       | Total training steps.              | `200000`          | `3000000`                      |
-| `--n-envs`                           | `6`                             | Number of parallel environments.   | `2` or `4`        | `8` or `12`                    |
-| `--seed`                             | `0`                             | Random seed for reproducibility.   | keep default      | keep default                   |
-| `--device`                           | `"cuda"`                        | Compute device (`cuda` or `cpu`).  | `cpu` if no GPU   | `cuda`                         |
-| `--algo`                             | `"td3"`                         | RL algorithm (`td3`, `ppo`, `sac`). | `"td3"`           | `"ppo"` or `"sac"`             |
-| `--net-arch`                         | `"256,256,128"`                 | Policy MLP sizes.                  | `"128,128"`       | `"256,256,256"`                |
-| `--lr`                               | `3e-4`                          | Learning rate.                     | keep default      | keep default                   |
-| `--tau`                              | `0.005`                         | Target network update rate.        | keep default      | keep default                   |
-| `--action-noise-sigma`               | `0.0`                           | Exploration noise.                 | `0.0`             | `0.05` to `0.1`                |
-| `--buffer-size`                      | `500000`                        | Replay buffer size.                | `100000`          | `1000000`                      |
-| `--batch-size`                       | `256`                           | Training batch size.               | `128`             | `512`                          |
-| `--learning-starts`                  | `20000`                         | Steps before learning starts.      | `5000`            | `50000`                        |
-| `--eval-episodes`                    | `8`                             | Episodes per task per seed.        | `2`               | `20`                           |
-| `--eval-seeds`                       | `"0,1,2,3"`                     | Eval seed list (comma-separated).  | `"0"`             | `"0,1,2,3,4"`                  |
-| `--eval-freq`                        | `50000`                         | How often to run eval (timesteps). | `200000`          | `10000`                        |
-| `--steps-weight`                     | `-0.05`                         | Legacy eval step penalty only.     | keep default      | keep default                   |
-| `--normalize-obs`                    | `False`                         | Normalize observations with VecNormalize. | `False`     | `True`                         |
-| `--vecnormalize-path`                | `None`                          | Load/save VecNormalize stats.      | n/a               | n/a                            |
-| `--bc-weights`                       | `None`                          | Path to BC weights for init.       | n/a               | n/a                            |
-| `--freeze-bc-layers`                 | `0`                             | Freeze first N actor Linear layers (requires `--bc-weights`). | `0` | `2` |
-| `--freeze-until-step`                | `0`                             | Timesteps to keep BC layers frozen. | `0`              | `200000`                       |
-| `--bc-replay-dataset`                | `None`                          | Demo replay dataset (`.npz`) for prefill. | n/a       | n/a                            |
-| `--bc-replay-fraction`               | `0.0`                           | Fraction of replay buffer to prefill. | `0.0`         | `0.1`                          |
-| `--resume-model`                     | `None`                          | Path to resume checkpoint.         | n/a               | n/a                            |
-| `--macro-reward-bonus`               | `0.0`                           | Extra reward for good macro use.   | `0.0`             | `0.25` to `0.5`                |
-| `--macro-reward-radius`              | `0.6`                           | Ball distance gate for bonus.      | keep default      | keep default                   |
-| `--macro-reward-alignment-threshold` | `0.6`                           | Alignment gate for bonus.          | keep default      | keep default                   |
-| `--macro-reward-cap`                 | `0.5`                           | Max bonus per episode.             | keep default      | keep default                   |
-| `--competition-only-eval`            | `False`                         | Skip legacy eval pass.             | `True`            | `False`                        |
-| `--task-weights`                     | `None`                          | Bias env slots by task.            | n/a               | n/a                            |
-| `--reward-profile`                   | `"base"`                        | Reward shaping profile.            | keep default      | `"pressure_shot"` or `"tight"` |
-| `--save-dir`                         | `"training_runs/multitask_td3"` | Output directory.                  | n/a               | n/a                            |
+| Flag                                 | Default                         | What it does                                                  | Light load option | Heavier load option            |
+| ------------------------------------ | ------------------------------- | ------------------------------------------------------------- | ----------------- | ------------------------------ |
+| `--total-timesteps`                  | `1000000`                       | Total training steps.                                         | `200000`          | `3000000`                      |
+| `--n-envs`                           | `6`                             | Number of parallel environments.                              | `2` or `4`        | `8` or `12`                    |
+| `--seed`                             | `0`                             | Random seed for reproducibility.                              | keep default      | keep default                   |
+| `--device`                           | `"cuda"`                        | Compute device (`cuda` or `cpu`).                             | `cpu` if no GPU   | `cuda`                         |
+| `--algo`                             | `"td3"`                         | RL algorithm (`td3`, `ppo`, `sac`).                           | `"td3"`           | `"ppo"` or `"sac"`             |
+| `--net-arch`                         | `"256,256,128"`                 | Policy MLP sizes.                                             | `"128,128"`       | `"256,256,256"`                |
+| `--lr`                               | `3e-4`                          | Learning rate.                                                | keep default      | keep default                   |
+| `--tau`                              | `0.005`                         | Target network update rate.                                   | keep default      | keep default                   |
+| `--action-noise-sigma`               | `0.0`                           | Exploration noise.                                            | `0.0`             | `0.05` to `0.1`                |
+| `--buffer-size`                      | `500000`                        | Replay buffer size.                                           | `100000`          | `1000000`                      |
+| `--batch-size`                       | `256`                           | Training batch size.                                          | `128`             | `512`                          |
+| `--learning-starts`                  | `20000`                         | Steps before learning starts.                                 | `5000`            | `50000`                        |
+| `--eval-episodes`                    | `8`                             | Episodes per task per seed.                                   | `2`               | `20`                           |
+| `--eval-seeds`                       | `"0,1,2,3"`                     | Eval seed list (comma-separated).                             | `"0"`             | `"0,1,2,3,4"`                  |
+| `--eval-freq`                        | `50000`                         | How often to run eval (timesteps).                            | `200000`          | `10000`                        |
+| `--steps-weight`                     | `-0.05`                         | Legacy eval step penalty only.                                | keep default      | keep default                   |
+| `--normalize-obs`                    | `False`                         | Normalize observations with VecNormalize.                     | `False`           | `True`                         |
+| `--vecnormalize-path`                | `None`                          | Load/save VecNormalize stats.                                 | n/a               | n/a                            |
+| `--bc-weights`                       | `None`                          | Path to BC weights for init.                                  | n/a               | n/a                            |
+| `--freeze-bc-layers`                 | `0`                             | Freeze first N actor Linear layers (requires `--bc-weights`). | `0`               | `2`                            |
+| `--freeze-until-step`                | `0`                             | Timesteps to keep BC layers frozen.                           | `0`               | `200000`                       |
+| `--bc-replay-dataset`                | `None`                          | Demo replay dataset (`.npz`) for prefill.                     | n/a               | n/a                            |
+| `--bc-replay-fraction`               | `0.0`                           | Fraction of replay buffer to prefill.                         | `0.0`             | `0.1`                          |
+| `--resume-model`                     | `None`                          | Path to resume checkpoint.                                    | n/a               | n/a                            |
+| `--macro-reward-bonus`               | `0.0`                           | Extra reward for good macro use.                              | `0.0`             | `0.25` to `0.5`                |
+| `--macro-reward-radius`              | `0.6`                           | Ball distance gate for bonus.                                 | keep default      | keep default                   |
+| `--macro-reward-alignment-threshold` | `0.6`                           | Alignment gate for bonus.                                     | keep default      | keep default                   |
+| `--macro-reward-cap`                 | `0.5`                           | Max bonus per episode.                                        | keep default      | keep default                   |
+| `--competition-only-eval`            | `False`                         | Skip legacy eval pass.                                        | `True`            | `False`                        |
+| `--task-weights`                     | `None`                          | Bias env slots by task.                                       | n/a               | n/a                            |
+| `--reward-profile`                   | `"base"`                        | Reward shaping profile.                                       | keep default      | `"pressure_shot"` or `"tight"` |
+| `--save-dir`                         | `"training_runs/multitask_td3"` | Output directory.                                             | n/a               | n/a                            |
 
 python training_scripts/train_multitask.py --total-timesteps 200000 --n-envs 2 --buffer-size 100000 --batch-size 128 --learning-starts 10000 --eval-episodes 2 --eval-freq 40000 --macro-reward-bonus 0.5 --save-dir "training_runs/multitask_td3/multitask_td3_2" --resume-model training_runs\overnight_20260102_231947\stage2\best_model.zip
 
@@ -314,3 +314,7 @@ or the defaults from `train_multitask.py`.
 python training_scripts/train_multitask.py --resume-model training_runs\overnight_20260102_231947\stage2\best_model.zip --total-timesteps 50000 --hf-token "" --legacy-only-eval --n-envs 6 --tasks kick_to_target --save-dir training_runs/ktt_single
 
 python training_scripts/train_multitask.py --total-timesteps 200000 --n-envs 6 --buffer-size 100000 --batch-size 128 --learning-starts 10000 --eval-episodes 2 --eval-freq 40000 --macro-reward-bonus 0.5 --tasks kick_to_target --save-dir training_runs/ktt_single --resume-model training_runs\overnight_20260102_231947\stage2\best_model.zip
+
+### 8) Training
+
+python training_scripts/eval_multitask.py --model training_runs/ktt_sac_gpu_500k/best_model_competition.zip --episodes 10 --steps-weight -0.001 --deterministic --task kick_to_target

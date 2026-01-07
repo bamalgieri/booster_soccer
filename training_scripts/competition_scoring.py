@@ -42,6 +42,10 @@ def compute_competition_report(
     task_name: str,
     steps: int,
 ) -> Dict[str, float]:
+    """Compute per-episode competition scoring report.
+
+    Official scorer uses steps=1.0 per episode regardless of episode length.
+    """
     if task_name not in COMP_REWARD_CONFIG:
         raise ValueError(f"Unknown task_name '{task_name}' for competition scoring.")
     if not isinstance(reward_terms, dict):
@@ -53,7 +57,8 @@ def compute_competition_report(
     report: Dict[str, float] = {}
     missing = 0
     total = 0.0
-    step_value = int(steps)
+    episode_steps = int(steps)
+    step_value = 1.0
 
     for component, weight in config.items():
         if component == "steps":
@@ -68,6 +73,7 @@ def compute_competition_report(
         report[f"comp_{component}"] = contribution
         total += contribution
 
+    report["episode_steps"] = episode_steps
     report["comp_total"] = float(total)
     report["missing_component_count"] = int(missing)
     return report
