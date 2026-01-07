@@ -61,6 +61,37 @@ _EVAL_TERM_KEYS = (
     "distance",
 )
 
+_COMP_DIAG_TERMS: Dict[str, tuple[str, ...]] = {
+    "kick_to_target": ("success", "offside", "distance"),
+    "goalie_penalty_kick": (
+        "goal_scored",
+        "offside",
+        "ball_hits",
+        "robot_fallen",
+        "ball_blocked",
+        "robot_distance_ball",
+        "ball_vel_twd_goal",
+    ),
+    "obstacle_penalty_kick": (
+        "goal_scored",
+        "offside",
+        "ball_hits",
+        "robot_fallen",
+        "ball_blocked",
+        "robot_distance_ball",
+        "ball_vel_twd_goal",
+    ),
+}
+
+_COMP_SUCCESS_KEYS = {
+    "kick_to_target": "success",
+    "goalie_penalty_kick": "goal_scored",
+    "obstacle_penalty_kick": "goal_scored",
+}
+
+_COMP_OFFSIDE_KEY = "offside"
+_MACRO_TRIGGER_KEY = "__macro_triggered"
+
 
 def build_task_list(
     n_envs: int,
@@ -377,10 +408,20 @@ class RewardProfileWrapper(gym.Wrapper):
 
 
 class CompetitionAlignmentWrapper(gym.Wrapper):
-    def __init__(self, env: gym.Env, task_name: str):
+    def __init__(
+        self,
+        env: gym.Env,
+        task_name: str,
+        macro_reward_bonus: float = 0.0,
+        macro_reward_cap: float = 0.5,
+    ):
         super().__init__(env)
         self.task_name = task_name or ""
         self.task_name_lower = self.task_name.lower()
+        self.macro_reward_bonus = float(macro_reward_bonus)
+        self.macro_reward_cap = float(macro_reward_cap)
+        self._macro_bonus_sum = 0.0
+        self._macro_steps = 0
 
     def _safe_float(self, value) -> float:
         try:
@@ -407,18 +448,41 @@ class CompetitionAlignmentWrapper(gym.Wrapper):
             )
         return reward
 
+    def _macro_bonus(self, info: Dict) -> float:
+        if self.macro_reward_bonus <= 0.0:
+            return 0.0
+        if not info.get("macro_triggered", False):
+            return 0.0
+        remaining = self.macro_reward_cap - self._macro_bonus_sum
+        if remaining <= 0.0:
+            return 0.0
+        return min(self.macro_reward_bonus, remaining)
+
+    def reset(self, **kwargs):
+        self._macro_bonus_sum = 0.0
+        self._macro_steps = 0
+        return self.env.reset(**kwargs)
+
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         reward_terms = info.get("reward_terms", {})
+        shaped = reward
         if isinstance(reward_terms, dict) and reward_terms:
-            return (
-                obs,
-                self._compute_reward(reward_terms, reward),
-                terminated,
-                truncated,
-                info,
-            )
-        return obs, reward, terminated, truncated, info
+            shaped = self._compute_reward(reward_terms, reward)
+        self._macro_steps += 1
+        macro_bonus = self._macro_bonus(info)
+        if macro_bonus > 0.0:
+            self._macro_bonus_sum += macro_bonus
+            shaped += macro_bonus
+            info = dict(info)
+            info["macro_reward_bonus"] = float(info.get("macro_reward_bonus", 0.0)) + macro_bonus
+        if terminated or truncated:
+            if self.macro_reward_bonus > 0.0:
+                info = dict(info)
+                info["macro_reward_bonus_mean"] = self._macro_bonus_sum / max(
+                    1, self._macro_steps
+                )
+        return obs, shaped, terminated, truncated, info
 
 
 def _matches_keywords(key: str, keywords: tuple[str, ...]) -> bool:
@@ -482,6 +546,15 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _is_truthy_metric(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    try:
+        return float(value) > 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 def _maybe_normalize_obs(obs: np.ndarray, obs_rms, epsilon: float) -> np.ndarray:
     if obs_rms is None:
         return obs
@@ -502,6 +575,22 @@ def _aggregate_reward_terms(
             totals[key] += _safe_float(terms.get(key, 0.0))
     count = max(1, len(term_list))
     return {key: value / count for key, value in totals.items()}
+
+
+def _compute_rate(term_list: List[Dict[str, float]], key: str) -> float:
+    if not term_list:
+        return 0.0
+    hits = 0
+    count = 0
+    for terms in term_list:
+        if not isinstance(terms, dict):
+            continue
+        count += 1
+        if _is_truthy_metric(terms.get(key, 0.0)):
+            hits += 1
+    if count == 0:
+        return 0.0
+    return hits / count
 
 
 def _assert_wrapper_order(
@@ -544,6 +633,7 @@ def make_env(
     macro_reward_radius: float = 0.6,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Callable[[], gym.Env]:
     def _resolve_site_name(base_env: gym.Env, site_name: str) -> str:
         if not isinstance(site_name, str) or site_name == "":
@@ -572,8 +662,14 @@ def make_env(
         env = gym.make(task_spec.env_id, render_mode=render_mode)
         base_env = env.unwrapped
         reward_mode = _normalize_reward_profile(reward_profile)
+        allow_competition_macro = (
+            reward_mode == "competition" and allow_macro_bonus_with_competition
+        )
         if reward_mode not in ("pressure_shot", "tight") and macro_reward_bonus > 0.0:
-            raise ValueError("macro_reward_bonus requires reward_profile=pressure_shot or tight.")
+            if not allow_competition_macro:
+                raise ValueError(
+                    "macro_reward_bonus requires reward_profile=pressure_shot or tight."
+                )
         if hasattr(base_env, "goal_site"):
             base_env.goal_site = _resolve_site_name(base_env, base_env.goal_site)
         if hasattr(base_env, "target_name"):
@@ -603,7 +699,12 @@ def make_env(
                 macro_reward_cap=macro_reward_cap,
             )
         if reward_mode == "competition":
-            env = CompetitionAlignmentWrapper(env, task_spec.name)
+            env = CompetitionAlignmentWrapper(
+                env,
+                task_spec.name,
+                macro_reward_bonus=macro_reward_bonus if allow_competition_macro else 0.0,
+                macro_reward_cap=macro_reward_cap,
+            )
         _assert_wrapper_order(
             env,
             has_reward_wrapper=reward_mode in ("pressure_shot", "tight"),
@@ -635,7 +736,7 @@ def compute_competition_terminal_score(
     reward_terms: Dict[str, float],
     steps: int,
 ) -> float:
-    return float(compute_competition_score(reward_terms, task_name, steps))
+    return float(compute_competition_score(reward_terms, task_name, 1))
 
 
 def evaluate_policy(
@@ -652,6 +753,7 @@ def evaluate_policy(
     obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Tuple[float, List[float], List[int], int | None, List[Dict[str, float]]]:
     env = make_env(
         task_spec,
@@ -661,6 +763,7 @@ def evaluate_policy(
         macro_reward_radius=macro_reward_radius,
         macro_reward_alignment_threshold=macro_reward_alignment_threshold,
         macro_reward_cap=macro_reward_cap,
+        allow_macro_bonus_with_competition=allow_macro_bonus_with_competition,
     )()
     scores: List[float] = []
     lengths: List[int] = []
@@ -709,6 +812,7 @@ def evaluate_policy_competition(
     obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Tuple[float, List[Dict[str, float]], List[Dict[str, float]]]:
     env = make_env(
         task_spec,
@@ -718,6 +822,7 @@ def evaluate_policy_competition(
         macro_reward_radius=macro_reward_radius,
         macro_reward_alignment_threshold=macro_reward_alignment_threshold,
         macro_reward_cap=macro_reward_cap,
+        allow_macro_bonus_with_competition=allow_macro_bonus_with_competition,
     )()
     reports: List[Dict[str, float]] = []
     reward_terms_list: List[Dict[str, float]] = []
@@ -726,8 +831,8 @@ def evaluate_policy_competition(
         obs, info = env.reset(seed=seed + ep)
         model_obs = _maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
         terminated = truncated = False
-        steps = 0
         reward_terms: Dict[str, float] = {}
+        macro_triggered = False
 
         while not (terminated or truncated):
             if hasattr(model, "predict"):
@@ -737,12 +842,16 @@ def evaluate_policy_competition(
             obs, _, terminated, truncated, info = env.step(action)
             current_terms = info.get("reward_terms", reward_terms)
             reward_terms = current_terms if isinstance(current_terms, dict) else reward_terms
+            if info.get("macro_triggered", False):
+                macro_triggered = True
             model_obs = _maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
-            steps += 1
 
-        report = compute_competition_report(reward_terms, task_spec.name, steps)
+        report = compute_competition_report(reward_terms, task_spec.name, 1)
         reports.append(report)
-        reward_terms_list.append(reward_terms if isinstance(reward_terms, dict) else {})
+        episode_terms = reward_terms if isinstance(reward_terms, dict) else {}
+        episode_terms = dict(episode_terms)
+        episode_terms[_MACRO_TRIGGER_KEY] = macro_triggered
+        reward_terms_list.append(episode_terms)
 
     env.close()
     mean_comp_total = float(np.mean([report["comp_total"] for report in reports])) if reports else 0.0
@@ -763,6 +872,7 @@ def evaluate_all_tasks(
     obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Dict[str, float]:
     return evaluate_selected_tasks(
         model,
@@ -779,6 +889,7 @@ def evaluate_all_tasks(
         obs_rms_epsilon=obs_rms_epsilon,
         macro_reward_alignment_threshold=macro_reward_alignment_threshold,
         macro_reward_cap=macro_reward_cap,
+        allow_macro_bonus_with_competition=allow_macro_bonus_with_competition,
     )
 
 
@@ -797,6 +908,7 @@ def evaluate_selected_tasks(
     obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Dict[str, float]:
     seeds = eval_seeds if eval_seeds is not None else [seed]
     if not seeds:
@@ -823,6 +935,7 @@ def evaluate_selected_tasks(
                 obs_rms_epsilon=obs_rms_epsilon,
                 macro_reward_alignment_threshold=macro_reward_alignment_threshold,
                 macro_reward_cap=macro_reward_cap,
+                allow_macro_bonus_with_competition=allow_macro_bonus_with_competition,
             )
             per_task_scores[task_spec.name].append(mean_score)
             all_lengths.extend(lengths)
@@ -861,6 +974,7 @@ def evaluate_all_tasks_competition(
     obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Dict[str, float]:
     return evaluate_selected_tasks_competition(
         model,
@@ -876,6 +990,7 @@ def evaluate_all_tasks_competition(
         obs_rms_epsilon=obs_rms_epsilon,
         macro_reward_alignment_threshold=macro_reward_alignment_threshold,
         macro_reward_cap=macro_reward_cap,
+        allow_macro_bonus_with_competition=allow_macro_bonus_with_competition,
     )
 
 
@@ -893,6 +1008,7 @@ def evaluate_selected_tasks_competition(
     obs_rms_epsilon: float = 1e-8,
     macro_reward_alignment_threshold: float = 0.6,
     macro_reward_cap: float = 0.5,
+    allow_macro_bonus_with_competition: bool = False,
 ) -> Dict[str, float]:
     seeds = eval_seeds if eval_seeds is not None else [seed]
     if not seeds:
@@ -916,6 +1032,7 @@ def evaluate_selected_tasks_competition(
                 obs_rms_epsilon=obs_rms_epsilon,
                 macro_reward_alignment_threshold=macro_reward_alignment_threshold,
                 macro_reward_cap=macro_reward_cap,
+                allow_macro_bonus_with_competition=allow_macro_bonus_with_competition,
             )
             per_task_reports[task_spec.name].extend(reports)
             per_task_terms[task_spec.name].extend(reward_terms_list)
@@ -937,6 +1054,22 @@ def evaluate_selected_tasks_competition(
         term_means = _aggregate_reward_terms(per_task_terms[task_name], _EVAL_TERM_KEYS)
         for term_key, term_value in term_means.items():
             results[f"{task_name}/{term_key}_mean"] = float(term_value)
+        diag_terms = _COMP_DIAG_TERMS.get(task_name, ())
+        if diag_terms:
+            diag_means = _aggregate_reward_terms(per_task_terms[task_name], diag_terms)
+            for term_key, term_value in diag_means.items():
+                results[f"{task_name}/term_mean/{term_key}"] = float(term_value)
+        success_key = _COMP_SUCCESS_KEYS.get(task_name)
+        if success_key:
+            results[f"{task_name}/success_rate"] = float(
+                _compute_rate(per_task_terms[task_name], success_key)
+            )
+        results[f"{task_name}/offside_rate"] = float(
+            _compute_rate(per_task_terms[task_name], _COMP_OFFSIDE_KEY)
+        )
+        results[f"{task_name}/macro_trigger_rate"] = float(
+            _compute_rate(per_task_terms[task_name], _MACRO_TRIGGER_KEY)
+        )
         comp_total_sum += float(aggregated["comp_total"])
 
     results["comp_total_sum"] = float(comp_total_sum)

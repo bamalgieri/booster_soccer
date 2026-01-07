@@ -14,7 +14,8 @@ If you have never run Python before, you can still follow the examples as "recip
 ## 1) Single-episode competition scoring (manual)
 
 Use this when you already have the terminal `reward_terms` from the environment and the number of steps.
-This is the core scoring function used by evaluation and checkpoint selection.
+This is the core scoring function used by evaluation and checkpoint selection (official scoring uses
+`steps=1.0` for the steps component regardless of episode length).
 
 Create a file named `examples_single_episode_score.py`:
 
@@ -32,7 +33,7 @@ reward_terms = {
     "ball_blocked": 0.0,
 }
 
-# The number of steps in that episode
+# The number of steps in that episode (stored as episode_steps metadata)
 steps = 350
 
 # Task name must match the TaskSpec name
@@ -56,7 +57,8 @@ Common mistakes:
   - `goalie_penalty_kick`
   - `obstacle_penalty_kick`
   - `kick_to_target`
-- Passing `steps=1`. Always use the real episode length.
+- Expecting the steps component to scale with episode length; the official evaluator injects
+  `steps=1.0`, so only `episode_steps` uses the provided step count.
 
 ---
 
@@ -187,10 +189,16 @@ print("macro length:", macro.actions.shape[0])
 ## 4) Optional: macro reward bonus (small shaping)
 
 If you want to encourage the policy to trigger macros at good times,
-set a small bonus in training:
+set a small bonus in training (requires `reward_profile=pressure_shot` or `tight` by default):
 
 ```powershell
-python training_scripts/train_multitask.py --macro-reward-bonus 0.5
+python training_scripts/train_multitask.py --reward-profile pressure_shot --macro-reward-bonus 0.5
+```
+
+For competition-shaped training, you must opt in to the macro bonus:
+
+```powershell
+python training_scripts/train_multitask.py --reward-profile competition --allow-macro-bonus-with-competition --macro-reward-bonus 0.1
 ```
 
 The wrapper only applies the bonus when:
@@ -243,6 +251,7 @@ and simple "light load" vs "heavier load" suggestions.
 | `--macro-reward-radius`              | `0.6`                           | Ball distance gate for bonus.                                 | keep default      | keep default                   |
 | `--macro-reward-alignment-threshold` | `0.6`                           | Alignment gate for bonus.                                     | keep default      | keep default                   |
 | `--macro-reward-cap`                 | `0.5`                           | Max bonus per episode.                                        | keep default      | keep default                   |
+| `--allow-macro-bonus-with-competition` | `False`                       | Allow macro bonus with `reward_profile=competition`.          | `False`           | `True`                         |
 | `--competition-only-eval`            | `False`                         | Skip legacy eval pass.                                        | `True`            | `False`                        |
 | `--task-weights`                     | `None`                          | Bias env slots by task.                                       | n/a               | n/a                            |
 | `--reward-profile`                   | `"base"`                        | Reward shaping profile.                                       | keep default      | `"pressure_shot"` or `"tight"` |

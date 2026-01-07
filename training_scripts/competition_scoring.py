@@ -58,7 +58,7 @@ def compute_competition_report(
     missing = 0
     total = 0.0
     episode_steps = int(steps)
-    step_value = 1.0
+    step_value = 1.0  # Official evaluator injects steps=1.0 per episode.
 
     for component, weight in config.items():
         if component == "steps":

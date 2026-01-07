@@ -52,6 +52,7 @@ class MultiTaskEvalCallback(BaseCallback):
         macro_reward_radius: float,
         macro_reward_alignment_threshold: float,
         macro_reward_cap: float,
+        allow_macro_bonus_with_competition: bool,
         competition_only_eval: bool,
         legacy_only_eval: bool,
         obs_rms=None,
@@ -72,6 +73,7 @@ class MultiTaskEvalCallback(BaseCallback):
         self.macro_reward_radius = macro_reward_radius
         self.macro_reward_alignment_threshold = macro_reward_alignment_threshold
         self.macro_reward_cap = macro_reward_cap
+        self.allow_macro_bonus_with_competition = allow_macro_bonus_with_competition
         self.competition_only_eval = competition_only_eval
         self.legacy_only_eval = legacy_only_eval
         self.deterministic = deterministic
@@ -101,6 +103,7 @@ class MultiTaskEvalCallback(BaseCallback):
                 obs_rms_epsilon=self.obs_rms_epsilon,
                 macro_reward_alignment_threshold=self.macro_reward_alignment_threshold,
                 macro_reward_cap=self.macro_reward_cap,
+                allow_macro_bonus_with_competition=self.allow_macro_bonus_with_competition,
             )
         comp_scores = None
         if not self.legacy_only_eval:
@@ -118,6 +121,7 @@ class MultiTaskEvalCallback(BaseCallback):
                 obs_rms_epsilon=self.obs_rms_epsilon,
                 macro_reward_alignment_threshold=self.macro_reward_alignment_threshold,
                 macro_reward_cap=self.macro_reward_cap,
+                allow_macro_bonus_with_competition=self.allow_macro_bonus_with_competition,
             )
         s_overall = scores["S_overall"] if scores is not None else None
         comp_total_sum = comp_scores["comp_total_sum"] if comp_scores is not None else None
@@ -135,6 +139,14 @@ class MultiTaskEvalCallback(BaseCallback):
                 self.logger.record(f"comp_eval/{task_spec.name}", task_score)
             comp_overall = float(comp_total_sum) if comp_total_sum is not None else 0.0
             self.logger.record("comp_eval/C_overall", comp_overall)
+            for key, value in comp_scores.items():
+                if (
+                    "/term_mean/" in key
+                    or key.endswith("/success_rate")
+                    or key.endswith("/offside_rate")
+                    or key.endswith("/macro_trigger_rate")
+                ):
+                    self.logger.record(f"comp_eval/{key}", value)
         if scores is not None and "ep_len_mean" not in scores:
             rollout_len = getattr(self.logger, "name_to_value", {}).get("rollout/ep_len_mean")
             if rollout_len is not None:
@@ -412,6 +424,11 @@ def main() -> None:
     parser.add_argument("--macro-reward-radius", type=float, default=0.6)
     parser.add_argument("--macro-reward-alignment-threshold", type=float, default=0.6)
     parser.add_argument("--macro-reward-cap", type=float, default=0.5)
+    parser.add_argument(
+        "--allow-macro-bonus-with-competition",
+        action="store_true",
+        help="Allow macro_reward_bonus when reward_profile=competition (training-only shaping).",
+    )
     parser.add_argument("--eval-seeds-random", type=int, default=0)
     parser.add_argument(
         "--normalize-obs",
@@ -494,8 +511,14 @@ def main() -> None:
     active_task_specs = parse_tasks(args.tasks)
     task_weights = parse_task_weights(args.task_weights)
     reward_mode = "env" if args.reward_profile == "base" else args.reward_profile
-    if reward_mode in ("env", "competition") and args.macro_reward_bonus > 0.0:
-        raise ValueError("macro_reward_bonus requires reward_profile=pressure_shot or tight.")
+    if args.macro_reward_bonus > 0.0:
+        if reward_mode == "env":
+            raise ValueError("macro_reward_bonus requires reward_profile=pressure_shot or tight.")
+        if reward_mode == "competition" and not args.allow_macro_bonus_with_competition:
+            raise ValueError(
+                "macro_reward_bonus requires reward_profile=pressure_shot or tight "
+                "(or --allow-macro-bonus-with-competition)."
+            )
     task_rng = np.random.default_rng(args.seed)
     task_list = build_task_list(
         args.n_envs,
@@ -514,11 +537,16 @@ def main() -> None:
                 macro_reward_radius=args.macro_reward_radius,
                 macro_reward_alignment_threshold=args.macro_reward_alignment_threshold,
                 macro_reward_cap=args.macro_reward_cap,
+                allow_macro_bonus_with_competition=args.allow_macro_bonus_with_competition,
             )
         )
 
     has_reward_wrapper = reward_mode in ("pressure_shot", "tight")
-    info_keywords = ("macro_reward_bonus_mean",) if has_reward_wrapper else ()
+    log_macro_bonus = args.macro_reward_bonus > 0.0 and (
+        has_reward_wrapper
+        or (reward_mode == "competition" and args.allow_macro_bonus_with_competition)
+    )
+    info_keywords = ("macro_reward_bonus_mean",) if log_macro_bonus else ()
     vec_env = VecMonitor(
         DummyVecEnv(env_fns),
         info_keywords=info_keywords,
@@ -734,6 +762,7 @@ def main() -> None:
         macro_reward_radius=args.macro_reward_radius,
         macro_reward_alignment_threshold=args.macro_reward_alignment_threshold,
         macro_reward_cap=args.macro_reward_cap,
+        allow_macro_bonus_with_competition=args.allow_macro_bonus_with_competition,
         competition_only_eval=args.competition_only_eval,
         legacy_only_eval=args.legacy_only_eval,
         deterministic=True,
