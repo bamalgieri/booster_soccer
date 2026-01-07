@@ -231,6 +231,7 @@ python training_scripts/train_multitask.py \
 ```
 
 Notes:
+
 - `--reward-profile` now supports `env` and `competition`; `base` is treated as `env`.
 - `--normalize-obs` enables VecNormalize and writes `vecnormalize.pkl` to the save dir.
   Pass `--vecnormalize-path` when resuming or `--vecnormalize` in eval scripts.
@@ -252,6 +253,15 @@ python training_scripts/eval_multitask.py \
   --episodes 10 \
   --steps-weight -0.001 \
   --deterministic
+```
+
+```bash
+python training_scripts/eval_multitask.py `
+  --model training_runs/ktt_sac_gpu_500k/best_model_competition.zip `
+  --episodes 10 `
+  --steps-weight -0.001 `
+  --deterministic `
+  --task kick_to_target
 ```
 
 ---

@@ -5,7 +5,8 @@ from gymnasium import spaces
 import numpy as np
 import torch
 import glfw
-from stable_baselines3 import TD3, SAC
+from stable_baselines3 import TD3, SAC, PPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from huggingface_hub import hf_hub_download
 
 # Make repo root importable without absolute paths
@@ -32,6 +33,38 @@ class CommandActionWrapper(gym.ActionWrapper):
         return ctrl
 
 
+def resolve_algo(env_id: str, algo: str | None) -> str:
+    if algo:
+        return algo.lower()
+    return "sac" if "kicktotarget" in env_id.lower() else "td3"
+
+
+def maybe_normalize_obs(obs, obs_rms, epsilon: float):
+    if obs_rms is None:
+        return obs
+    return (obs - obs_rms.mean) / (np.sqrt(obs_rms.var) + epsilon)
+
+
+def load_vecnormalize_stats(vecnormalize_path: str, env_fn):
+    vec_env = DummyVecEnv([env_fn])
+    vec_norm = VecNormalize.load(vecnormalize_path, vec_env)
+    vec_norm.training = False
+    vec_norm.norm_reward = False
+    obs_rms = vec_norm.obs_rms
+    epsilon = vec_norm.epsilon
+    vec_env.close()
+    return obs_rms, epsilon
+
+
+def get_viewer_window(env):
+    base_env = getattr(env, "base_env", None)
+    if base_env is None:
+        base_env = env.unwrapped
+    renderer = getattr(base_env, "mujoco_renderer", None)
+    viewer = getattr(renderer, "viewer", None) if renderer is not None else None
+    return getattr(viewer, "window", None) if viewer is not None else None
+
+
 def resolve_model_filename(env_id: str) -> str:
     """
     Pick the model filename based on env name.
@@ -41,10 +74,8 @@ def resolve_model_filename(env_id: str) -> str:
     """
     env_lc = env_id.lower()
     if "goalie" in env_lc:
-        # return "training_runs/overnight_20260102_231947/stage2/best_model.zip"
-         return "models/td3_goalie_penalty_kick.zip"
+        return "models/td3_goalie_penalty_kick.zip"
     if "kick" in env_lc:
-        # return "training_runs/overnight_20260102_231947/stage2/best_model.zip"
         # Adjust if your repo uses a different filename for the kicker model
         return "models/sac_kick_to_target.zip"
     raise ValueError(
@@ -72,41 +103,103 @@ def main():
         default=5,
         help="Number of rollout episodes",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Path to a local SB3 zip (default: download pretrained model).",
+    )
+    parser.add_argument(
+        "--algo",
+        type=str,
+        default=None,
+        choices=["td3", "sac", "ppo"],
+        help="SB3 algorithm used to train the model (default: infer from env).",
+    )
+    parser.add_argument(
+        "--vecnormalize-path",
+        dest="vecnormalize_path",
+        type=str,
+        default=None,
+        help="Path to VecNormalize stats (vecnormalize.pkl) to normalize observations.",
+    )
+    parser.add_argument(
+        "--multitask",
+        action="store_true",
+        help="Use multitask wrappers from training_scripts/multitask_utils.",
+    )
     args = parser.parse_args()
 
-    # Resolve model path from env name
-    try:
-        model_relpath = resolve_model_filename(args.env)
-    except ValueError as e:
-        print(f"[ERROR] {e}")
-        sys.exit(1)
+    if args.multitask:
+        from multitask_utils import TASK_SPECS, make_env
 
-    # Try to fetch the model from Hugging Face
-    try:
-        model_file = hf_hub_download(
-            repo_id="SaiResearch/booster_soccer_models",
-            filename=model_relpath,
-            repo_type="model",
-        )
-    except Exception as e:
-        print(
-            f"[ERROR] Model file '{model_relpath}' not found in SaiResearch/booster_soccer_models.\n"
-            f"Details: {e}"
-        )
+        task_spec = next((spec for spec in TASK_SPECS if spec.env_id == args.env), None)
+        if task_spec is None:
+            print(f"[ERROR] Unknown env for multitask wrapper: {args.env}")
+            sys.exit(1)
+        render_env_fn = make_env(task_spec, render_mode="human")
+        eval_env_fn = make_env(task_spec, render_mode=None)
+    else:
+        def render_env_fn():
+            base_env = gym.make(args.env, render_mode="human")
+            return CommandActionWrapper(base_env)
+
+        def eval_env_fn():
+            base_env = gym.make(args.env, render_mode=None)
+            return CommandActionWrapper(base_env)
+
+    obs_rms = None
+    obs_rms_epsilon = 1e-8
+    if args.vecnormalize_path:
+        vec_path = os.path.expanduser(args.vecnormalize_path)
+        if not os.path.exists(vec_path):
+            print(f"[ERROR] VecNormalize stats not found: {vec_path}")
+            sys.exit(1)
+        obs_rms, obs_rms_epsilon = load_vecnormalize_stats(vec_path, eval_env_fn)
+        print(f"[INFO] Loaded VecNormalize stats from {vec_path}")
+
+    if args.model:
+        model_file = os.path.expanduser(args.model)
+        if not os.path.exists(model_file):
+            print(f"[ERROR] Model file not found: {model_file}")
+            sys.exit(1)
+    else:
+        # Resolve model path from env name
+        try:
+            model_relpath = resolve_model_filename(args.env)
+        except ValueError as e:
+            print(f"[ERROR] {e}")
+            sys.exit(1)
+
+        # Try to fetch the model from Hugging Face
+        try:
+            model_file = hf_hub_download(
+                repo_id="SaiResearch/booster_soccer_models",
+                filename=model_relpath,
+                repo_type="model",
+            )
+        except Exception as e:
+            print(
+                f"[ERROR] Model file '{model_relpath}' not found in SaiResearch/booster_soccer_models.\n"
+                f"Details: {e}"
+            )
+            sys.exit(1)
+
+    algo = resolve_algo(args.env, args.algo)
+    algo_map = {"td3": TD3, "sac": SAC, "ppo": PPO}
+    if algo not in algo_map:
+        print(f"[ERROR] Unsupported algo: {algo}")
         sys.exit(1)
+    model = algo_map[algo].load(model_file, device=args.device)
 
     # Build env
-    base_env = gym.make(args.env, render_mode="human")
-    env = CommandActionWrapper(base_env)
+    env = render_env_fn()
+    use_lowlevel_obs = (not args.multitask) and ("KickToTarget" in args.env)
 
-    viewer = getattr(env.base_env.mujoco_renderer, "viewer", None)
-    window = getattr(viewer, "window", None) if viewer is not None else None
-
-
-    if "KickToTarget" in args.env:
-        model = SAC.load(model_file, device=args.device)
-    else:
-        model = TD3.load(model_file, device=args.device)
+    def get_model_obs(obs, info):
+        if use_lowlevel_obs:
+            obs = env.lower_control.get_obs(np.zeros(3), obs, info)
+        return maybe_normalize_obs(obs, obs_rms, obs_rms_epsilon)
 
     # ---- Rollout ----
     for ep in range(args.episodes):
@@ -115,12 +208,8 @@ def main():
         ep_return = 0.0
         print(f"[Episode {ep+1}] Running. Press ESC to stop.")
 
-        viewer = getattr(env.base_env.mujoco_renderer, "viewer", None)
-        window = getattr(viewer, "window", None) if viewer is not None else None
-
-
         while not (terminated or truncated):
-
+            window = get_viewer_window(env)
             if window is not None and glfw.get_current_context() is not None:
                 # Stop if user hit ESC inside the MuJoCo window
                 if glfw.get_key(window, glfw.KEY_ESCAPE) == glfw.PRESS:
@@ -133,11 +222,8 @@ def main():
                     print("\n[INFO] Window closed — stopping and exiting.")
                     env.close()
                     sys.exit(0)
-                    
-            if "KickToTarget" in args.env:
-                obs = env.lower_control.get_obs(np.zeros(3), obs, info)
-
-            action, _ = model.predict(obs, deterministic=True)
+            model_obs = get_model_obs(obs, info)
+            action, _ = model.predict(model_obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             ep_return += float(reward)
 

@@ -14,7 +14,8 @@ If you have never run Python before, you can still follow the examples as "recip
 ## 1) Single-episode competition scoring (manual)
 
 Use this when you already have the terminal `reward_terms` from the environment and the number of steps.
-This is the core scoring function used by evaluation and checkpoint selection.
+This is the core scoring function used by evaluation and checkpoint selection (official scoring uses
+`steps=1.0` for the steps component regardless of episode length).
 
 Create a file named `examples_single_episode_score.py`:
 
@@ -32,7 +33,7 @@ reward_terms = {
     "ball_blocked": 0.0,
 }
 
-# The number of steps in that episode
+# The number of steps in that episode (stored as episode_steps metadata)
 steps = 350
 
 # Task name must match the TaskSpec name
@@ -56,7 +57,8 @@ Common mistakes:
   - `goalie_penalty_kick`
   - `obstacle_penalty_kick`
   - `kick_to_target`
-- Passing `steps=1`. Always use the real episode length.
+- Expecting the steps component to scale with episode length; the official evaluator injects
+  `steps=1.0`, so only `episode_steps` uses the provided step count.
 
 ---
 
@@ -69,6 +71,14 @@ If you already have a trained model:
 ```powershell
 python training_scripts/eval_multitask.py --model path\to\best_model.zip --episodes 5 --deterministic
 ```
+
+If the model was trained with `--normalize-obs`, load the matching stats:
+
+```powershell
+python training_scripts/eval_multitask.py --model path\to\best_model.zip --episodes 5 --deterministic --vecnormalize-path training_runs\multitask_td3\vecnormalize.pkl
+```
+
+Use the `vecnormalize.pkl` from the same training run to avoid shape mismatches.
 
 This prints:
 
@@ -179,10 +189,16 @@ print("macro length:", macro.actions.shape[0])
 ## 4) Optional: macro reward bonus (small shaping)
 
 If you want to encourage the policy to trigger macros at good times,
-set a small bonus in training:
+set a small bonus in training (requires `reward_profile=pressure_shot` or `tight` by default):
 
 ```powershell
-python training_scripts/train_multitask.py --macro-reward-bonus 0.5
+python training_scripts/train_multitask.py --reward-profile pressure_shot --macro-reward-bonus 0.5
+```
+
+For competition-shaped training, you must opt in to the macro bonus:
+
+```powershell
+python training_scripts/train_multitask.py --reward-profile competition --allow-macro-bonus-with-competition --macro-reward-bonus 0.1
 ```
 
 The wrapper only applies the bonus when:
@@ -205,42 +221,67 @@ and simple "light load" vs "heavier load" suggestions.
 
 ### A) train_multitask.py flags
 
-| Flag                                 | Default                         | What it does                       | Light load option | Heavier load option            |
-| ------------------------------------ | ------------------------------- | ---------------------------------- | ----------------- | ------------------------------ |
-| `--total-timesteps`                  | `1000000`                       | Total training steps.              | `200000`          | `3000000`                      |
-| `--n-envs`                           | `6`                             | Number of parallel environments.   | `2` or `4`        | `8` or `12`                    |
-| `--seed`                             | `0`                             | Random seed for reproducibility.   | keep default      | keep default                   |
-| `--device`                           | `"cuda"`                        | Compute device (`cuda` or `cpu`).  | `cpu` if no GPU   | `cuda`                         |
-| `--net-arch`                         | `"256,256,128"`                 | Policy MLP sizes.                  | `"128,128"`       | `"256,256,256"`                |
-| `--lr`                               | `3e-4`                          | Learning rate.                     | keep default      | keep default                   |
-| `--tau`                              | `0.005`                         | Target network update rate.        | keep default      | keep default                   |
-| `--action-noise-sigma`               | `0.0`                           | Exploration noise.                 | `0.0`             | `0.05` to `0.1`                |
-| `--buffer-size`                      | `500000`                        | Replay buffer size.                | `100000`          | `1000000`                      |
-| `--batch-size`                       | `256`                           | Training batch size.               | `128`             | `512`                          |
-| `--learning-starts`                  | `20000`                         | Steps before learning starts.      | `5000`            | `50000`                        |
-| `--eval-episodes`                    | `8`                             | Episodes per task per seed.        | `2`               | `20`                           |
-| `--eval-seeds`                       | `"0"`                           | Eval seed list (comma-separated).  | `"0"`             | `"0,1,2,3,4"`                  |
-| `--eval-freq`                        | `50000`                         | How often to run eval (timesteps). | `200000`          | `10000`                        |
-| `--steps-weight`                     | `-0.05`                         | Legacy eval step penalty only.     | keep default      | keep default                   |
-| `--bc-weights`                       | `None`                          | Path to BC weights for init.       | n/a               | n/a                            |
-| `--resume-model`                     | `None`                          | Path to resume checkpoint.         | n/a               | n/a                            |
-| `--macro-reward-bonus`               | `0.0`                           | Extra reward for good macro use.   | `0.0`             | `0.25` to `0.5`                |
-| `--macro-reward-radius`              | `0.6`                           | Ball distance gate for bonus.      | keep default      | keep default                   |
-| `--macro-reward-alignment-threshold` | `0.6`                           | Alignment gate for bonus.          | keep default      | keep default                   |
-| `--macro-reward-cap`                 | `0.5`                           | Max bonus per episode.             | keep default      | keep default                   |
-| `--competition-only-eval`            | `False`                         | Skip legacy eval pass.             | `True`            | `False`                        |
-| `--task-weights`                     | `None`                          | Bias env slots by task.            | n/a               | n/a                            |
-| `--reward-profile`                   | `"base"`                        | Reward shaping profile.            | keep default      | `"pressure_shot"` or `"tight"` |
-| `--save-dir`                         | `"training_runs/multitask_td3"` | Output directory.                  | n/a               | n/a                            |
+| Flag                                 | Default                         | What it does                                                  | Light load option | Heavier load option            |
+| ------------------------------------ | ------------------------------- | ------------------------------------------------------------- | ----------------- | ------------------------------ |
+| `--total-timesteps`                  | `1000000`                       | Total training steps.                                         | `200000`          | `3000000`                      |
+| `--n-envs`                           | `6`                             | Number of parallel environments.                              | `2` or `4`        | `8` or `12`                    |
+| `--seed`                             | `0`                             | Random seed for reproducibility.                              | keep default      | keep default                   |
+| `--device`                           | `"cuda"`                        | Compute device (`cuda` or `cpu`).                             | `cpu` if no GPU   | `cuda`                         |
+| `--algo`                             | `"td3"`                         | RL algorithm (`td3`, `ppo`, `sac`).                           | `"td3"`           | `"ppo"` or `"sac"`             |
+| `--net-arch`                         | `"256,256,128"`                 | Policy MLP sizes.                                             | `"128,128"`       | `"256,256,256"`                |
+| `--lr`                               | `3e-4`                          | Learning rate.                                                | keep default      | keep default                   |
+| `--tau`                              | `0.005`                         | Target network update rate.                                   | keep default      | keep default                   |
+| `--action-noise-sigma`               | `0.0`                           | Exploration noise.                                            | `0.0`             | `0.05` to `0.1`                |
+| `--buffer-size`                      | `500000`                        | Replay buffer size.                                           | `100000`          | `1000000`                      |
+| `--batch-size`                       | `256`                           | Training batch size.                                          | `128`             | `512`                          |
+| `--learning-starts`                  | `20000`                         | Steps before learning starts.                                 | `5000`            | `50000`                        |
+| `--eval-episodes`                    | `8`                             | Episodes per task per seed.                                   | `2`               | `20`                           |
+| `--eval-seeds`                       | `"0,1,2,3"`                     | Eval seed list (comma-separated).                             | `"0"`             | `"0,1,2,3,4"`                  |
+| `--eval-freq`                        | `50000`                         | How often to run eval (timesteps).                            | `200000`          | `10000`                        |
+| `--steps-weight`                     | `-0.05`                         | Legacy eval step penalty only.                                | keep default      | keep default                   |
+| `--normalize-obs`                    | `False`                         | Normalize observations with VecNormalize.                     | `False`           | `True`                         |
+| `--vecnormalize-path`                | `None`                          | Load/save VecNormalize stats.                                 | n/a               | n/a                            |
+| `--bc-weights`                       | `None`                          | Path to BC weights for init.                                  | n/a               | n/a                            |
+| `--freeze-bc-layers`                 | `0`                             | Freeze first N actor Linear layers (requires `--bc-weights`). | `0`               | `2`                            |
+| `--freeze-until-step`                | `0`                             | Timesteps to keep BC layers frozen.                           | `0`               | `200000`                       |
+| `--bc-replay-dataset`                | `None`                          | Demo replay dataset (`.npz`) for prefill.                     | n/a               | n/a                            |
+| `--bc-replay-fraction`               | `0.0`                           | Fraction of replay buffer to prefill.                         | `0.0`             | `0.1`                          |
+| `--resume-model`                     | `None`                          | Path to resume checkpoint.                                    | n/a               | n/a                            |
+| `--macro-reward-bonus`               | `0.0`                           | Extra reward for good macro use.                              | `0.0`             | `0.25` to `0.5`                |
+| `--macro-reward-radius`              | `0.6`                           | Ball distance gate for bonus.                                 | keep default      | keep default                   |
+| `--macro-reward-alignment-threshold` | `0.6`                           | Alignment gate for bonus.                                     | keep default      | keep default                   |
+| `--macro-reward-cap`                 | `0.5`                           | Max bonus per episode.                                        | keep default      | keep default                   |
+| `--allow-macro-bonus-with-competition` | `False`                       | Allow macro bonus with `reward_profile=competition`.          | `False`           | `True`                         |
+| `--competition-only-eval`            | `False`                         | Skip legacy eval pass.                                        | `True`            | `False`                        |
+| `--task-weights`                     | `None`                          | Bias env slots by task.                                       | n/a               | n/a                            |
+| `--reward-profile`                   | `"base"`                        | Reward shaping profile.                                       | keep default      | `"pressure_shot"` or `"tight"` |
+| `--save-dir`                         | `"training_runs/multitask_td3"` | Output directory.                                             | n/a               | n/a                            |
 
 python training_scripts/train_multitask.py --total-timesteps 200000 --n-envs 2 --buffer-size 100000 --batch-size 128 --learning-starts 10000 --eval-episodes 2 --eval-freq 40000 --macro-reward-bonus 0.5 --save-dir "training_runs/multitask_td3/multitask_td3_2" --resume-model training_runs\overnight_20260102_231947\stage2\best_model.zip
 
 python train_multitask.py --total-timesteps --n-envs --action-noise-sigma --buffer-size --batch-size --learning-starts --eval-episodes --eval-freq --macro-reward-bonus --competition-only-eval --save-dir
 
-Tip: If you want faster runs, lower `eval-episodes`, set `eval-seeds` to a single seed,
-and increase `eval-freq` so evaluation happens less often.
+Tip: Defaults use 4 eval seeds (`0,1,2,3`), so evaluation is slower. If you want faster runs,
+lower `eval-episodes`, set `--eval-seeds "0"`, and increase `eval-freq` so evaluation happens
+less often.
 
-### B) overnight_3stage.py flags
+### B) 2-day workflow examples (condensed)
+
+Day 1: build the BC dataset and train a BC policy.
+
+```powershell
+python training_scripts/build_bc_dataset.py --input-root booster_dataset/soccer/booster_lower_t1 --output booster_dataset/imitation_learning/bc_commands.npz --enable-sentinels --context-mode sentinel
+python training_scripts/bc_train.py --dataset booster_dataset/imitation_learning/bc_commands.npz --out training_runs/bc_actor.pt --net-arch 256,256 --epochs 40 --batch-size 1024 --lr 3e-4 --seed 0
+```
+
+Day 2: multi-task RL fine-tuning and evaluation.
+
+```powershell
+python training_scripts/train_multitask.py --algo ppo --total-timesteps 5000000 --n-envs 32 --task-weights goalie_penalty_kick=1,obstacle_penalty_kick=1,kick_to_target=1 --bc-weights training_runs/bc_actor.pt --freeze-bc-layers 2 --freeze-until-step 200000 --bc-replay-dataset booster_dataset/imitation_learning/bc_commands.npz --bc-replay-fraction 0.1 --normalize-obs --save-dir training_runs/multitask_ppo --competition-only-eval --eval-freq 100000 --eval-episodes 4 --eval-seeds 0,1,2,3
+python training_scripts/eval_multitask.py --model training_runs/multitask_ppo/best_model_competition.zip --episodes 20 --deterministic --vecnormalize-path training_runs/multitask_ppo/vecnormalize.pkl
+```
+
+### C) overnight_3stage.py flags
 
 Note: This script sets many training hyperparameters internally per stage.
 The flags below only override the exposed knobs.
@@ -282,3 +323,7 @@ or the defaults from `train_multitask.py`.
 python training_scripts/train_multitask.py --resume-model training_runs\overnight_20260102_231947\stage2\best_model.zip --total-timesteps 50000 --hf-token "" --legacy-only-eval --n-envs 6 --tasks kick_to_target --save-dir training_runs/ktt_single
 
 python training_scripts/train_multitask.py --total-timesteps 200000 --n-envs 6 --buffer-size 100000 --batch-size 128 --learning-starts 10000 --eval-episodes 2 --eval-freq 40000 --macro-reward-bonus 0.5 --tasks kick_to_target --save-dir training_runs/ktt_single --resume-model training_runs\overnight_20260102_231947\stage2\best_model.zip
+
+### 8) Training
+
+python training_scripts/eval_multitask.py --model training_runs/ktt_sac_gpu_500k/best_model_competition.zip --episodes 10 --steps-weight -0.001 --deterministic --task kick_to_target

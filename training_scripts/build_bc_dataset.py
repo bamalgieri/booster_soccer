@@ -436,10 +436,32 @@ def main() -> None:
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(output, observations=observations, actions=actions)
+    sentinel_mask = np.all(
+        actions * sentinel_pattern >= args.sentinel_threshold, axis=1
+    ).astype(np.uint8)
     sentinel_total = stats["sentinel_total"]
     total = stats["total"]
     sentinel_pct = (sentinel_total / total * 100.0) if total else 0.0
+    file_counts = stats["by_file"]
+    file_names = np.array(sorted(file_counts.keys()), dtype=str)
+    file_total = np.array(
+        [file_counts[name]["total"] for name in file_names], dtype=np.int64
+    )
+    file_sentinel = np.array(
+        [file_counts[name]["sentinel"] for name in file_names], dtype=np.int64
+    )
+    np.savez(
+        output,
+        observations=observations,
+        actions=actions,
+        sentinels=sentinel_mask,
+        sentinel_total=np.array(sentinel_total, dtype=np.int64),
+        sentinel_pct=np.array(sentinel_pct, dtype=np.float32),
+        total_samples=np.array(total, dtype=np.int64),
+        sentinel_files=file_names,
+        sentinel_file_total=file_total,
+        sentinel_file_sentinel=file_sentinel,
+    )
     print(
         f"Wrote {observations.shape[0]} samples to {output} "
         f"(scale_lin={scale_lin:.3f}, scale_yaw={scale_yaw:.3f})"

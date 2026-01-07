@@ -22,8 +22,8 @@ class CompetitionScoringTests(unittest.TestCase):
             task_name="goalie_penalty_kick",
             steps=10,
         )
-        self.assertAlmostEqual(report["comp_steps"], -10.0)
-        self.assertAlmostEqual(report["comp_total"], -5.5)
+        self.assertAlmostEqual(report["comp_steps"], -1.0)
+        self.assertAlmostEqual(report["comp_total"], 3.5)
         self.assertEqual(report["missing_component_count"], 0)
 
     def test_missing_components_counted(self) -> None:
@@ -34,8 +34,8 @@ class CompetitionScoringTests(unittest.TestCase):
             steps=3,
         )
         self.assertAlmostEqual(report["comp_goal_scored"], 2.5)
-        self.assertAlmostEqual(report["comp_steps"], -3.0)
-        self.assertAlmostEqual(report["comp_total"], -0.5)
+        self.assertAlmostEqual(report["comp_steps"], -1.0)
+        self.assertAlmostEqual(report["comp_total"], 1.5)
         self.assertEqual(report["missing_component_count"], 6)
 
     def test_bool_values_converted(self) -> None:
@@ -48,8 +48,16 @@ class CompetitionScoringTests(unittest.TestCase):
         self.assertAlmostEqual(report["comp_success"], 2.0)
         self.assertAlmostEqual(report["comp_offside"], 0.0)
         self.assertAlmostEqual(report["comp_distance"], 1.0)
-        self.assertAlmostEqual(report["comp_steps"], -0.6)
-        self.assertAlmostEqual(report["comp_total"], 2.4)
+        self.assertAlmostEqual(report["comp_steps"], -0.3)
+        self.assertAlmostEqual(report["comp_total"], 2.7)
+
+    def test_steps_constant_per_episode(self) -> None:
+        report = compute_competition_report(
+            reward_terms={},
+            task_name="kick_to_target",
+            steps=5000,
+        )
+        self.assertAlmostEqual(report["comp_steps"], -0.3)
 
     def test_unknown_task_raises(self) -> None:
         with self.assertRaises(ValueError):
